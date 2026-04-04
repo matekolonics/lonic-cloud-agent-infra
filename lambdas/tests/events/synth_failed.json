@@ -1,0 +1,8 @@
+{
+  "taskToken": "AAAAKgAAAAIAAAAAAAAAAQ==",
+  "commandId": "cmd-synth-789",
+  "callbackUrl": "https://api.lonic.dev/agent/callback/cmd-synth-789",
+  "status": "FAILED",
+  "error": "CDK synth failed: exit code 1",
+  "buildId": "agent-synth:build-abc123"
+}

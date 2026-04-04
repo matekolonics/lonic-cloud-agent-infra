@@ -1,0 +1,8 @@
+{
+  "taskToken": "AAAAKgAAAAIAAAAAAAAAAQ==",
+  "commandId": "cmd-def456",
+  "callbackUrl": "https://api.lonic.dev/agent/callback/cmd-def456",
+  "status": "FAILED",
+  "error": "Stack creation failed: Resource handler returned message: \"Service already exists\"",
+  "stackName": "AppStack"
+}

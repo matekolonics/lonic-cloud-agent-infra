@@ -1,0 +1,18 @@
+[package]
+name = "event-reporter"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agent-core = { path = "../agent-core" }
+lambda_runtime.workspace = true
+aws-config.workspace = true
+aws-sdk-cloudformation.workspace = true
+aws-sdk-codebuild.workspace = true
+aws-sdk-sfn.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+tokio.workspace = true

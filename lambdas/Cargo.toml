@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/agent-core",
+    "crates/event-reporter",
+    "crates/health-check",
+]
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# AWS SDK
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-cloudformation = "1"
+aws-sdk-sfn = "1"
+aws-sdk-secretsmanager = "1"
+aws-sdk-codebuild = "1"
+aws-sdk-sts = "1"
+
+# Lambda runtime
+lambda_runtime = "0.13"
+
+# Async runtime
+tokio = { version = "1", features = ["macros"] }
+
+# HTTP client (for callbacks)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+thiserror = "2"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }

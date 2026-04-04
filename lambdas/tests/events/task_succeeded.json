@@ -1,0 +1,18 @@
+{
+  "taskToken": "AAAAKgAAAAIAAAAAAAAAAQ==",
+  "commandId": "cmd-abc123",
+  "callbackUrl": "https://api.lonic.dev/agent/callback/cmd-abc123",
+  "status": "SUCCEEDED",
+  "step": "deploying stack AppStack (2/2)",
+  "outputs": {
+    "stacks": [
+      {
+        "name": "AppStack",
+        "status": "CREATE_COMPLETE",
+        "outputs": {
+          "ServiceUrl": "https://app.example.com"
+        }
+      }
+    ]
+  }
+}
