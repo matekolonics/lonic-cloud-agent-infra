@@ -85,14 +85,16 @@ Cargo workspace, core types, event-reporter Lambda, callback client with bearer 
 
 ## Infra repo (lonic-cloud-agent-infra)
 
-### Phase 1: Base agent stack
+### Phase 1: Base agent stack ✅
 
-- API Gateway (HTTP API v2) with IAM authorization
-- Lambda function for event-reporter (artifact from code repo Phase 1)
-- IAM roles — scoped execution role, cross-account trust for the hosted backend
-- Secrets Manager secret for callback bearer token
-- Wire `LONIC_CALLBACK_TOKEN_ARN` env var to the Lambda
-- One-click deployment via CloudFormation template or `cdk deploy`
+- ~~API Gateway (HTTP API v2) with IAM authorization~~ → REST API with IAM auth and resource policy scoped to backend role ✅
+- Lambda function for event-reporter (Rust, ARM64, artifact from code repo) ✅
+- IAM roles — scoped execution role, cross-account trust for the hosted backend ✅
+- Secrets Manager secret for callback bearer token ✅
+- Wire `LONIC_CALLBACK_TOKEN_ARN` env var to the Lambda ✅
+- One-click deployment via CloudFormation template or `cdk deploy` ✅
+- Agent registration custom resource (calls backend on stack create/update) ✅
+- EventBridge rule routing SFN completion events to event-reporter ✅
 
 **Depends on:** Code Phase 1 (event-reporter binary)
 
@@ -100,14 +102,14 @@ Cargo workspace, core types, event-reporter Lambda, callback client with bearer 
 
 ---
 
-### Phase 2: Step Functions state machines (MVP commands)
+### Phase 2: Step Functions state machines (MVP commands) ✅
 
-- **deploy-stacks** — triggers the built-in pipeline, reports progress via event-reporter
-- **destroy-stacks** — calls CloudFormation `DeleteStack` in dependency order, reports progress
-- **describe-stacks** — calls CloudFormation `DescribeStacks`, returns results
-- **get-execution-status** — queries Step Functions execution status
+- **deploy-stacks** — full change set flow (exists check → create → poll → execute → poll) with parallel Map over stacks ✅
+- **destroy-stacks** — DeleteStack + poll until complete, parallel Map over stacks ✅
+- **describe-stacks** — DescribeStacks via EXPRESS sync execution, parallel Map over stacks ✅
+- **get-execution-status** — DescribeExecution via EXPRESS sync execution ✅
 
-API Gateway routes → state machines (service integration). Each state machine uses native SDK integrations for CloudFormation and invokes event-reporter as a Task state.
+API Gateway routes → state machines (service integration via `addStartExecutionRoute` / `addSyncExecutionRoute`). State machines use native SDK integrations and lonic-cdk-commons step constructs.
 
 **Depends on:** Infra Phase 1
 
@@ -115,24 +117,26 @@ API Gateway routes → state machines (service integration). Each state machine 
 
 ---
 
-### Phase 3: Built-in deployment pipeline
+### Phase 3: Built-in deployment pipeline ✅
 
-- Reusable CDK/stack deployment pipeline using the library's `SynthStep` and `DeployStacksStep`
-- Pipeline state change events wired to event-reporter Lambda
-- This is the pipeline that `deploy-stacks` triggers
+- Deployment pipeline using the library's `SynthStep` (CodeBuild, DYNAMIC source mode) and `DeployStacksStep` (dependency-ordered waves) ✅
+- Pipeline state change events wired to event-reporter Lambda via EventBridge (shared rule catches all SFN completions) ✅
+- `POST /commands/deploy-pipeline` route ✅
+- Presigned S3 upload URL endpoint (`POST /commands/get-upload-url`) for secure cross-account source delivery ✅
+- Pipeline artifacts bucket (auto-created by `PipelineContext`, reused for uploads under `uploads/` prefix) ✅
 
 **Depends on:** Infra Phase 2, lonic-cdk-commons library
 
-**Outcome:** The agent has a working pipeline that can synth and deploy CDK stacks.
+**Outcome:** The agent has a working pipeline that can synth and deploy CDK stacks. The backend can securely upload source archives via presigned URLs.
 
 ---
 
-### Phase 4: Health check, self-update, and runtime error reporting
+### Phase 4: Health check, self-update, and runtime error reporting 🔶 (partially complete)
 
-- Health check Lambda deployment (artifact from code repo Phase 2) ✅
-- Health check API Gateway route ✅
-- **Self-update command** — `POST /commands/self-update` state machine that applies a raw CloudFormation template to the agent's own stack via change sets (create → poll → execute → poll). The backend synthesises the new agent template ahead of time and uploads it to S3 via the `get-upload-url` endpoint. No CDK pipeline involved — this is a direct CloudFormation update.
-- **Runtime error reporting** — CloudWatch alarm on Lambda errors (event-reporter, health-check, get-upload-url) wired to an SNS topic → a lightweight error-reporter Lambda that POSTs to the backend callback URL. Catches the scenario where the event-reporter itself crashes (e.g. after a bad self-update), which would otherwise be a silent failure since the normal callback path is broken.
+- Health check Lambda deployment (Rust, ARM64, artifact from code repo) ✅
+- Health check API Gateway route (`GET /health`) ✅
+- **Self-update command** (`POST /commands/self-update`) — applies a raw CloudFormation template to the agent's own stack via change sets (create → poll → execute → poll) ✅
+- **Runtime error reporting** — CloudWatch alarm on Lambda errors (event-reporter, health-check, get-upload-url) wired to an SNS topic → a lightweight error-reporter Lambda that POSTs to the backend callback URL. Catches the scenario where the event-reporter itself crashes (e.g. after a bad self-update), which would otherwise be a silent failure since the normal callback path is broken. ❌
 
 **Depends on:** Code Phase 2, Infra Phase 2
 
@@ -140,12 +144,12 @@ API Gateway routes → state machines (service integration). Each state machine 
 
 ---
 
-### Phase 5: Multi-region and multi-account
+### Phase 5: Multi-region and multi-account 🔶 (partially complete)
 
-- Support deploying agent stacks across multiple regions/accounts
-- Agent registration mechanism (calls hosted backend on stack deploy/update)
-- Optional SQS-based command queue for agent pooling
-- Wire `AGENT_ID` env var
+- Support deploying agent stacks across multiple regions/accounts ❌
+- Agent registration mechanism (calls hosted backend on stack deploy/update) ✅ (implemented as custom resource in Phase 1)
+- Optional SQS-based command queue for agent pooling ❌
+- Wire `AGENT_ID` env var ✅ (wired to event-reporter, health-check, and registration)
 
 **Depends on:** Code Phase 4, Infra Phase 4
 
@@ -153,14 +157,15 @@ API Gateway routes → state machines (service integration). Each state machine 
 
 ---
 
-### Phase 6: Synth commands (CodeBuild)
+### Phase 6: Synth commands (CodeBuild) ❌
 
-- **synth-pipeline** — state machine that runs PipelineBuilder via `cdk synth` in CodeBuild
-- **synth-infrastructure** — state machine that runs InfrastructureBuilder via `cdk synth` in CodeBuild
-- **synth-cdk-project** — state machine that clones a customer repo and runs `cdk synth` in CodeBuild
-- **discover-stacks** — state machine that runs `cdk ls` or parses `cdk.out` in CodeBuild
-- CodeBuild projects with appropriate IAM roles and artifact bucket
-- Event payloads must include `buildId` for log enrichment by event-reporter
+- **synth-pipeline** — state machine that runs PipelineBuilder via `cdk synth` in CodeBuild ❌
+- **synth-infrastructure** — state machine that runs InfrastructureBuilder via `cdk synth` in CodeBuild ❌
+- **synth-cdk-project** — state machine that clones a customer repo and runs `cdk synth` in CodeBuild ❌
+- **discover-stacks** — state machine that runs `cdk ls` or parses `cdk.out` in CodeBuild ❌
+- CodeBuild projects with appropriate IAM roles and artifact bucket ❌
+- Event payloads must include `buildId` for log enrichment by event-reporter ❌
+- `codebuild:BatchGetBuilds` permission on event-reporter IAM role (required by Code Phase 6) ❌
 
 **Depends on:** Infra Phase 3, Code Phase 6 (log enrichment), lonic-cdk-commons library
 
@@ -168,13 +173,13 @@ API Gateway routes → state machines (service integration). Each state machine 
 
 ---
 
-### Phase 7: Additional stack management commands
+### Phase 7: Additional stack management commands ✅
 
-- **detect-drift** — state machine using native `DetectStackDrift` + polling `DescribeStackDriftDetectionStatus`
-- **get-changeset** — state machine using native `CreateChangeSet` + `DescribeChangeSet`
-- **start-execution** — state machine using native `StartExecution`
+- **detect-drift** — DetectStackDrift + poll DescribeStackDriftDetectionStatus + DescribeStackResourceDrifts ✅
+- **get-changeset** — CreateChangeSet + poll DescribeChangeSet + return changes + DeleteChangeSet cleanup ✅
+- **start-execution** — generic StartExecution wrapper (EXPRESS sync) ✅
 
-All native Step Functions SDK integrations, same pattern as Phase 2.
+All use lonic-cdk-commons step constructs and `PollUntilStep`.
 
 **Depends on:** Infra Phase 2
 
@@ -185,23 +190,33 @@ All native Step Functions SDK integrations, same pattern as Phase 2.
 ## Cross-repo dependency map
 
 ```
-Code Phase 1 ✅ ──────────────► Infra Phase 1
+Code Phase 1 ✅ ──────────────► Infra Phase 1 ✅
                                     │
                                     ▼
-                                Infra Phase 2 (MVP commands)
+                                Infra Phase 2 ✅ (MVP commands)
                                     │
-                                    ├──────────────► Infra Phase 7 (drift, changeset, start-execution)
+                                    ├──────────────► Infra Phase 7 ✅ (drift, changeset, start-execution)
                                     ▼
-Code Phase 2 ✅ ───────────────► Infra Phase 3 (pipeline)
+Code Phase 2 ✅ ───────────────► Infra Phase 3 ✅ (pipeline + upload URL)
 Code Phase 3 ✅ (independent)       │
-Code Phase 5 (command types)        ▼
-                                Infra Phase 4 (health check + self-update)
+Code Phase 5 ✅ (command types)     ▼
+                                Infra Phase 4 🔶 (health ✅, self-update ✅, runtime errors ❌)
                                     │
                                     ▼
-Code Phase 4 ✅ ───────────────► Infra Phase 5 (multi-region)
+Code Phase 4 ✅ ───────────────► Infra Phase 5 🔶 (registration ✅, multi-region ❌)
 
-Code Phase 6 (build log enrich) ──► Infra Phase 6 (synth/CodeBuild commands)
+Code Phase 6 ✅ (build log) ─────► Infra Phase 6 ❌ (synth/CodeBuild commands)
 ```
+
+---
+
+## Remaining work (priority order)
+
+1. **Runtime error reporting** (Phase 4) — CloudWatch alarms + SNS + error-reporter Lambda
+2. **CodeBuild log enrichment permission** (Phase 6 prereq) — add `codebuild:BatchGetBuilds` to event-reporter
+3. **Synth commands** (Phase 6) — synth-pipeline, synth-infrastructure, synth-cdk-project, discover-stacks
+4. **Multi-region deployment support** (Phase 5) — cross-account/region patterns
+5. **SQS command queue** (Phase 5) — agent pooling for high-throughput scenarios
 
 ---
 
