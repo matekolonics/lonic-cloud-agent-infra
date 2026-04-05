@@ -15,6 +15,7 @@ import { DeployStacksCommand } from './commands/deploy-stacks';
 import { DetectDriftCommand } from './commands/detect-drift';
 import { GetChangesetCommand } from './commands/get-changeset';
 import { StartExecutionCommand } from './commands/start-execution';
+import { SelfUpdateCommand } from './commands/self-update';
 import { DeploymentPipeline } from './pipeline/deployment-pipeline';
 import { GetUploadUrl } from './lambdas/get-upload-url';
 
@@ -137,6 +138,10 @@ export class LonicCloudAgentStack extends cdk.Stack {
     });
 
     new StartExecutionCommand(this, 'StartExecution', {
+      api: this.agentApi.restApi,
+    });
+
+    new SelfUpdateCommand(this, 'SelfUpdate', {
       api: this.agentApi.restApi,
     });
 

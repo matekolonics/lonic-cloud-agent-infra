@@ -127,16 +127,16 @@ API Gateway routes → state machines (service integration). Each state machine 
 
 ---
 
-### Phase 4: Health check and self-update infra
+### Phase 4: Health check, self-update, and runtime error reporting
 
-- Health check Lambda deployment (artifact from code repo Phase 2)
-- Health check API Gateway route
-- Self-update flow — a state machine that deploys a new version of the agent stack via the built-in pipeline
-- Wire `AGENT_PIPELINE_ARN` env var
+- Health check Lambda deployment (artifact from code repo Phase 2) ✅
+- Health check API Gateway route ✅
+- **Self-update command** — `POST /commands/self-update` state machine that applies a raw CloudFormation template to the agent's own stack via change sets (create → poll → execute → poll). The backend synthesises the new agent template ahead of time and uploads it to S3 via the `get-upload-url` endpoint. No CDK pipeline involved — this is a direct CloudFormation update.
+- **Runtime error reporting** — CloudWatch alarm on Lambda errors (event-reporter, health-check, get-upload-url) wired to an SNS topic → a lightweight error-reporter Lambda that POSTs to the backend callback URL. Catches the scenario where the event-reporter itself crashes (e.g. after a bad self-update), which would otherwise be a silent failure since the normal callback path is broken.
 
-**Depends on:** Code Phase 2, Infra Phase 3
+**Depends on:** Code Phase 2, Infra Phase 2
 
-**Outcome:** The backend can health-check and remotely update agents.
+**Outcome:** The backend can health-check, remotely update agents, and detect runtime failures even when the normal callback path is broken.
 
 ---
 

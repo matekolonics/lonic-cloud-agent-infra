@@ -355,6 +355,9 @@ test('API Gateway has command routes', () => {
   template.hasResourceProperties('AWS::ApiGateway::Resource', {
     PathPart: 'deploy-pipeline',
   });
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'self-update',
+  });
 });
 
 test('API Gateway has get-upload-url route', () => {
@@ -366,14 +369,14 @@ test('API Gateway has get-upload-url route', () => {
 
 test('command routes use POST with IAM auth', () => {
   const template = createStack();
-  // 7 command routes + 1 pipeline route + 1 get-upload-url route = 9 POST methods
+  // 8 command routes + 1 pipeline route + 1 get-upload-url route = 10 POST methods
   const postMethods = template.findResources('AWS::ApiGateway::Method', {
     Properties: {
       HttpMethod: 'POST',
       AuthorizationType: 'AWS_IAM',
     },
   });
-  expect(Object.keys(postMethods).length).toBe(9);
+  expect(Object.keys(postMethods).length).toBe(10);
 });
 
 // --- Outputs ---
@@ -519,6 +522,47 @@ test('get-upload-url Lambda has S3 PutObject permissions on upload prefix', () =
         Match.objectLike({
           Action: Match.arrayWith(['s3:PutObject']),
           Effect: 'Allow',
+        }),
+      ]),
+    }),
+  });
+});
+
+// --- Self-Update ---
+
+test('self-update state machine has change set and describe permissions', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: [
+            'cloudformation:CreateChangeSet',
+            'cloudformation:DescribeChangeSet',
+            'cloudformation:ExecuteChangeSet',
+            'cloudformation:DescribeStacks',
+          ],
+          Effect: 'Allow',
+        }),
+      ]),
+    }),
+  });
+});
+
+test('self-update state machine has CloudFormation CalledVia permissions', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: '*',
+          Effect: 'Allow',
+          Resource: '*',
+          Condition: {
+            'ForAnyValue:StringEquals': {
+              'aws:CalledVia': ['cloudformation.amazonaws.com'],
+            },
+          },
         }),
       ]),
     }),
