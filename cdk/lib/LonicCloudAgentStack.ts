@@ -163,6 +163,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
     // --- Runtime Error Reporting (independent alarm-based path to backend) ---
 
     this.runtimeErrorReporter = new RuntimeErrorReporter(this, 'RuntimeErrorReporter', {
+      api: this.agentApi.restApi,
       monitoredFunctions: [
         this.eventReporter.fn,
         this.healthCheck.fn,

@@ -638,3 +638,40 @@ test('runtime error reporter SNS topic has Lambda subscription', () => {
     Protocol: 'lambda',
   });
 });
+
+// --- Error Stats ---
+
+test('error-stats Lambda uses Node.js 22 on ARM64', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Runtime: 'nodejs22.x',
+    Architectures: ['arm64'],
+    Description: Match.stringLikeRegexp('error statistics'),
+  });
+});
+
+test('error-stats Lambda has CloudWatch GetMetricStatistics permission', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: 'cloudwatch:GetMetricStatistics',
+          Effect: 'Allow',
+          Resource: '*',
+        }),
+      ]),
+    }),
+  });
+});
+
+test('error-stats route exists at GET /error-stats with IAM auth', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'error-stats',
+  });
+  template.hasResourceProperties('AWS::ApiGateway::Method', {
+    HttpMethod: 'GET',
+    AuthorizationType: 'AWS_IAM',
+  });
+});
