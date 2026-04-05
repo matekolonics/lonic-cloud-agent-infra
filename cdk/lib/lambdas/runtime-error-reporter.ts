@@ -24,7 +24,7 @@ export interface RuntimeErrorReporterProps {
   readonly agentIdParam: cdk.CfnParameter;
   /**
    * How often to push aggregated error stats to the backend.
-   * @default Duration.minutes(5)
+   * @default Duration.minutes(30)
    */
   readonly reportingInterval?: cdk.Duration;
 }
@@ -318,7 +318,7 @@ exports.handler = async () => {
 
     new events.Rule(this, 'ScheduleRule', {
       description: 'Periodically triggers aggregated error stats reporting to the lonic backend.',
-      schedule: events.Schedule.rate(props.reportingInterval ?? cdk.Duration.minutes(5)),
+      schedule: events.Schedule.rate(props.reportingInterval ?? cdk.Duration.minutes(30)),
       targets: [new targets.LambdaFunction(this.scheduledReporterFn)],
     });
   }

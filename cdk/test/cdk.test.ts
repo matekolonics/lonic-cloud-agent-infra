@@ -695,10 +695,10 @@ test('scheduled error reporter Lambda pushes stats to backend', () => {
   });
 });
 
-test('scheduled error reporter runs on a 5-minute interval', () => {
+test('scheduled error reporter runs on a 30-minute interval', () => {
   const template = createStack();
   template.hasResourceProperties('AWS::Events::Rule', {
     Description: Match.stringLikeRegexp('error stats reporting'),
-    ScheduleExpression: 'rate(5 minutes)',
+    ScheduleExpression: 'rate(30 minutes)',
   });
 });
