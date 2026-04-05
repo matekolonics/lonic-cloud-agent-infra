@@ -16,6 +16,7 @@ import { DetectDriftCommand } from './commands/detect-drift';
 import { GetChangesetCommand } from './commands/get-changeset';
 import { StartExecutionCommand } from './commands/start-execution';
 import { SelfUpdateCommand } from './commands/self-update';
+import { SynthCommand } from './commands/synth';
 import { DeploymentPipeline } from './pipeline/deployment-pipeline';
 import { GetUploadUrl } from './lambdas/get-upload-url';
 import { RuntimeErrorReporter } from './lambdas/runtime-error-reporter';
@@ -151,6 +152,36 @@ export class LonicCloudAgentStack extends cdk.Stack {
 
     this.deploymentPipeline = new DeploymentPipeline(this, 'DeploymentPipeline', {
       api: this.agentApi.restApi,
+    });
+
+    // --- Synth Commands (CodeBuild-based CDK synthesis) ---
+
+    new SynthCommand(this, 'SynthPipeline', {
+      api: this.agentApi.restApi,
+      artifactsBucket: this.deploymentPipeline.artifactsBucket,
+      routePath: 'synth-pipeline',
+      stateMachineName: 'LonicAgent-SynthPipeline',
+    });
+
+    new SynthCommand(this, 'SynthInfrastructure', {
+      api: this.agentApi.restApi,
+      artifactsBucket: this.deploymentPipeline.artifactsBucket,
+      routePath: 'synth-infrastructure',
+      stateMachineName: 'LonicAgent-SynthInfrastructure',
+    });
+
+    new SynthCommand(this, 'SynthCdkProject', {
+      api: this.agentApi.restApi,
+      artifactsBucket: this.deploymentPipeline.artifactsBucket,
+      routePath: 'synth-cdk-project',
+      stateMachineName: 'LonicAgent-SynthCdkProject',
+    });
+
+    new SynthCommand(this, 'DiscoverStacks', {
+      api: this.agentApi.restApi,
+      artifactsBucket: this.deploymentPipeline.artifactsBucket,
+      routePath: 'discover-stacks',
+      stateMachineName: 'LonicAgent-DiscoverStacks',
     });
 
     // --- Upload URL generator (presigned S3 PUT for the pipeline artifacts bucket) ---

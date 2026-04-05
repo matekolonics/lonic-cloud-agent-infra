@@ -157,15 +157,16 @@ API Gateway routes → state machines (service integration via `addStartExecutio
 
 ---
 
-### Phase 6: Synth commands (CodeBuild) ❌
+### Phase 6: Synth commands (CodeBuild) ✅
 
-- **synth-pipeline** — state machine that runs PipelineBuilder via `cdk synth` in CodeBuild ❌
-- **synth-infrastructure** — state machine that runs InfrastructureBuilder via `cdk synth` in CodeBuild ❌
-- **synth-cdk-project** — state machine that clones a customer repo and runs `cdk synth` in CodeBuild ❌
-- **discover-stacks** — state machine that runs `cdk ls` or parses `cdk.out` in CodeBuild ❌
-- CodeBuild projects with appropriate IAM roles and artifact bucket ❌
-- Event payloads must include `buildId` for log enrichment by event-reporter ❌
-- `codebuild:BatchGetBuilds` permission on event-reporter IAM role (required by Code Phase 6) ✅
+- **synth-pipeline** — `POST /commands/synth-pipeline`, runs `cdk synth` in CodeBuild with DYNAMIC source ✅
+- **synth-infrastructure** — `POST /commands/synth-infrastructure`, same pattern ✅
+- **synth-cdk-project** — `POST /commands/synth-cdk-project`, same pattern ✅
+- **discover-stacks** — `POST /commands/discover-stacks`, same pattern (backend reads stackNames/deploymentWaves from output) ✅
+- All four use the reusable `SynthCommand` construct wrapping `CdkSynthStep` with DYNAMIC source mode ✅
+- CodeBuild projects with appropriate IAM roles and shared artifacts bucket ✅
+- Event payloads include `buildId` via `CdkSynthStep` CodeBuild integration (log enrichment by event-reporter) ✅
+- `codebuild:BatchGetBuilds` permission on event-reporter IAM role ✅
 
 **Depends on:** Infra Phase 3, Code Phase 6 (log enrichment), lonic-cdk-commons library
 
@@ -205,16 +206,15 @@ Code Phase 5 ✅ (command types)     ▼
                                     ▼
 Code Phase 4 ✅ ───────────────► Infra Phase 5 🔶 (registration ✅, multi-region ❌)
 
-Code Phase 6 ✅ (build log) ─────► Infra Phase 6 ❌ (synth/CodeBuild commands)
+Code Phase 6 ✅ (build log) ─────► Infra Phase 6 ✅ (synth/CodeBuild commands)
 ```
 
 ---
 
 ## Remaining work (priority order)
 
-1. **Synth commands** (Phase 6) — synth-pipeline, synth-infrastructure, synth-cdk-project, discover-stacks
-2. **Multi-region deployment support** (Phase 5) — cross-account/region patterns
-3. **SQS command queue** (Phase 5) — agent pooling for high-throughput scenarios
+1. **Multi-region deployment support** (Phase 5) — cross-account/region patterns
+2. **SQS command queue** (Phase 5) — agent pooling for high-throughput scenarios
 
 ---
 

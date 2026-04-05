@@ -369,14 +369,14 @@ test('API Gateway has get-upload-url route', () => {
 
 test('command routes use POST with IAM auth', () => {
   const template = createStack();
-  // 8 command routes + 1 pipeline route + 1 get-upload-url route = 10 POST methods
+  // 8 command routes + 4 synth commands + 1 pipeline route + 1 get-upload-url route = 14 POST methods
   const postMethods = template.findResources('AWS::ApiGateway::Method', {
     Properties: {
       HttpMethod: 'POST',
       AuthorizationType: 'AWS_IAM',
     },
   });
-  expect(Object.keys(postMethods).length).toBe(10);
+  expect(Object.keys(postMethods).length).toBe(14);
 });
 
 // --- Outputs ---
@@ -701,4 +701,33 @@ test('scheduled error reporter runs on a 30-minute interval', () => {
     Description: Match.stringLikeRegexp('error stats reporting'),
     ScheduleExpression: 'rate(30 minutes)',
   });
+});
+
+// --- Phase 6: Synth Commands ---
+
+test('synth commands have API routes', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'synth-pipeline',
+  });
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'synth-infrastructure',
+  });
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'synth-cdk-project',
+  });
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'discover-stacks',
+  });
+});
+
+test('synth commands create CodeBuild projects', () => {
+  const template = createStack();
+  // 4 synth commands + 1 deployment pipeline = 5 CodeBuild projects
+  const projects = template.findResources('AWS::CodeBuild::Project', {
+    Properties: {
+      Source: { Type: 'NO_SOURCE' },
+    },
+  });
+  expect(Object.keys(projects).length).toBe(5);
 });
