@@ -41,5 +41,10 @@ export class EventReporter extends Construct {
       actions: ['cloudformation:DescribeStackEvents'],
       resources: ['*'],
     }));
+
+    this.fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['codebuild:BatchGetBuilds'],
+      resources: ['*'],
+    }));
   }
 }

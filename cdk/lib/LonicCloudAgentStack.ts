@@ -18,6 +18,7 @@ import { StartExecutionCommand } from './commands/start-execution';
 import { SelfUpdateCommand } from './commands/self-update';
 import { DeploymentPipeline } from './pipeline/deployment-pipeline';
 import { GetUploadUrl } from './lambdas/get-upload-url';
+import { RuntimeErrorReporter } from './lambdas/runtime-error-reporter';
 
 export interface LonicCloudAgentStackProps extends cdk.StackProps {
   /** ARN of the IAM role in the lonic hosted backend account that is allowed to invoke this agent's API Gateway. */
@@ -37,6 +38,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
   public readonly healthCheck: HealthCheck;
   public readonly deploymentPipeline: DeploymentPipeline;
   public readonly getUploadUrl: GetUploadUrl;
+  public readonly runtimeErrorReporter: RuntimeErrorReporter;
 
   constructor(scope: Construct, id: string, props: LonicCloudAgentStackProps) {
     super(scope, id, props);
@@ -156,6 +158,19 @@ export class LonicCloudAgentStack extends cdk.Stack {
     this.getUploadUrl = new GetUploadUrl(this, 'GetUploadUrl', {
       api: this.agentApi.restApi,
       uploadBucket: this.deploymentPipeline.artifactsBucket,
+    });
+
+    // --- Runtime Error Reporting (independent alarm-based path to backend) ---
+
+    this.runtimeErrorReporter = new RuntimeErrorReporter(this, 'RuntimeErrorReporter', {
+      monitoredFunctions: [
+        this.eventReporter.fn,
+        this.healthCheck.fn,
+        this.getUploadUrl.fn,
+      ],
+      callbackTokenSecret: this.registration.callbackTokenSecret,
+      callbackBaseUrl: props.callbackBaseUrl,
+      agentIdParam,
     });
 
     // --- Outputs ---

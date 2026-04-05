@@ -131,12 +131,12 @@ API Gateway routes → state machines (service integration via `addStartExecutio
 
 ---
 
-### Phase 4: Health check, self-update, and runtime error reporting 🔶 (partially complete)
+### Phase 4: Health check, self-update, and runtime error reporting ✅
 
 - Health check Lambda deployment (Rust, ARM64, artifact from code repo) ✅
 - Health check API Gateway route (`GET /health`) ✅
 - **Self-update command** (`POST /commands/self-update`) — applies a raw CloudFormation template to the agent's own stack via change sets (create → poll → execute → poll) ✅
-- **Runtime error reporting** — CloudWatch alarm on Lambda errors (event-reporter, health-check, get-upload-url) wired to an SNS topic → a lightweight error-reporter Lambda that POSTs to the backend callback URL. Catches the scenario where the event-reporter itself crashes (e.g. after a bad self-update), which would otherwise be a silent failure since the normal callback path is broken. ❌
+- **Runtime error reporting** — CloudWatch alarms on Lambda errors (event-reporter, health-check, get-upload-url) wired to an SNS topic → a lightweight Node.js error-reporter Lambda that POSTs alarm state to the backend's `/agent/runtime-error` endpoint. Independent callback path that works even when the primary event-reporter is broken. ✅
 
 **Depends on:** Code Phase 2, Infra Phase 2
 
@@ -165,7 +165,7 @@ API Gateway routes → state machines (service integration via `addStartExecutio
 - **discover-stacks** — state machine that runs `cdk ls` or parses `cdk.out` in CodeBuild ❌
 - CodeBuild projects with appropriate IAM roles and artifact bucket ❌
 - Event payloads must include `buildId` for log enrichment by event-reporter ❌
-- `codebuild:BatchGetBuilds` permission on event-reporter IAM role (required by Code Phase 6) ❌
+- `codebuild:BatchGetBuilds` permission on event-reporter IAM role (required by Code Phase 6) ✅
 
 **Depends on:** Infra Phase 3, Code Phase 6 (log enrichment), lonic-cdk-commons library
 
@@ -200,7 +200,7 @@ Code Phase 1 ✅ ──────────────► Infra Phase 1 ✅
 Code Phase 2 ✅ ───────────────► Infra Phase 3 ✅ (pipeline + upload URL)
 Code Phase 3 ✅ (independent)       │
 Code Phase 5 ✅ (command types)     ▼
-                                Infra Phase 4 🔶 (health ✅, self-update ✅, runtime errors ❌)
+                                Infra Phase 4 ✅ (health, self-update, runtime errors)
                                     │
                                     ▼
 Code Phase 4 ✅ ───────────────► Infra Phase 5 🔶 (registration ✅, multi-region ❌)
@@ -212,11 +212,9 @@ Code Phase 6 ✅ (build log) ─────► Infra Phase 6 ❌ (synth/CodeBui
 
 ## Remaining work (priority order)
 
-1. **Runtime error reporting** (Phase 4) — CloudWatch alarms + SNS + error-reporter Lambda
-2. **CodeBuild log enrichment permission** (Phase 6 prereq) — add `codebuild:BatchGetBuilds` to event-reporter
-3. **Synth commands** (Phase 6) — synth-pipeline, synth-infrastructure, synth-cdk-project, discover-stacks
-4. **Multi-region deployment support** (Phase 5) — cross-account/region patterns
-5. **SQS command queue** (Phase 5) — agent pooling for high-throughput scenarios
+1. **Synth commands** (Phase 6) — synth-pipeline, synth-infrastructure, synth-cdk-project, discover-stacks
+2. **Multi-region deployment support** (Phase 5) — cross-account/region patterns
+3. **SQS command queue** (Phase 5) — agent pooling for high-throughput scenarios
 
 ---
 

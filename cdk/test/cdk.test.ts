@@ -568,3 +568,73 @@ test('self-update state machine has CloudFormation CalledVia permissions', () =>
     }),
   });
 });
+
+// --- Event Reporter: CodeBuild log enrichment ---
+
+test('event-reporter has CodeBuild BatchGetBuilds permission', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: 'codebuild:BatchGetBuilds',
+          Effect: 'Allow',
+          Resource: '*',
+        }),
+      ]),
+    }),
+  });
+});
+
+// --- Runtime Error Reporting ---
+
+test('runtime error reporter creates an SNS topic', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::SNS::Topic', {
+    DisplayName: 'Lonic Agent Runtime Errors',
+  });
+});
+
+test('runtime error reporter Lambda uses Node.js 22 on ARM64', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Runtime: 'nodejs22.x',
+    Architectures: ['arm64'],
+    Description: Match.stringLikeRegexp('runtime errors'),
+  });
+});
+
+test('runtime error reporter Lambda has callback environment variables', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Description: Match.stringLikeRegexp('runtime errors'),
+    Environment: {
+      Variables: Match.objectLike({
+        LONIC_CALLBACK_BASE_URL: CALLBACK_BASE_URL,
+        LONIC_CALLBACK_TOKEN_ARN: Match.anyValue(),
+        AGENT_ID: { Ref: 'AgentId' },
+      }),
+    },
+  });
+});
+
+test('runtime error reporter creates CloudWatch alarms for monitored Lambdas', () => {
+  const template = createStack();
+  // 3 monitored functions: event-reporter, health-check, get-upload-url
+  const alarms = template.findResources('AWS::CloudWatch::Alarm', {
+    Properties: {
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+      Threshold: 1,
+      MetricName: 'Errors',
+      Namespace: 'AWS/Lambda',
+    },
+  });
+  expect(Object.keys(alarms).length).toBe(3);
+});
+
+test('runtime error reporter SNS topic has Lambda subscription', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::SNS::Subscription', {
+    Protocol: 'lambda',
+  });
+});
