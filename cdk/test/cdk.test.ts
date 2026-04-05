@@ -675,3 +675,30 @@ test('error-stats route exists at GET /error-stats with IAM auth', () => {
     AuthorizationType: 'AWS_IAM',
   });
 });
+
+// --- Scheduled Error Stats Push ---
+
+test('scheduled error reporter Lambda pushes stats to backend', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Runtime: 'nodejs22.x',
+    Architectures: ['arm64'],
+    Description: Match.stringLikeRegexp('Periodically pushes'),
+    Environment: {
+      Variables: Match.objectLike({
+        MONITORED_FUNCTIONS: Match.anyValue(),
+        LONIC_CALLBACK_BASE_URL: CALLBACK_BASE_URL,
+        LONIC_CALLBACK_TOKEN_ARN: Match.anyValue(),
+        AGENT_ID: { Ref: 'AgentId' },
+      }),
+    },
+  });
+});
+
+test('scheduled error reporter runs on a 5-minute interval', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::Events::Rule', {
+    Description: Match.stringLikeRegexp('error stats reporting'),
+    ScheduleExpression: 'rate(5 minutes)',
+  });
+});
