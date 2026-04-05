@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib/core';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { pipeline, steps, sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
 import { addStartExecutionRoute } from '../commands/api-sfn-integration';
@@ -8,16 +9,6 @@ import { addStartExecutionRoute } from '../commands/api-sfn-integration';
 export interface DeploymentPipelineProps {
   /** API Gateway to add the deploy-pipeline route to. */
   readonly api: apigateway.RestApi;
-  /**
-   * Path within the source archive where the CDK app lives (directory containing `cdk.json`).
-   * @default '.'
-   */
-  readonly cdkAppDirectory?: string;
-  /**
-   * CDK CLI version to install in the CodeBuild synth environment.
-   * @default 'latest'
-   */
-  readonly cdkCliVersion?: string;
 }
 
 /**
@@ -46,24 +37,26 @@ export interface DeploymentPipelineProps {
  */
 export class DeploymentPipeline extends Construct {
   public readonly pipeline: pipeline.Pipeline;
+  /** The S3 bucket used for pipeline artifacts (synth output, source uploads). */
+  public artifactsBucket!: s3.IBucket;
 
   constructor(scope: Construct, id: string, props: DeploymentPipelineProps) {
     super(scope, id);
 
     this.pipeline = new pipeline.Pipeline(this, 'Pipeline', {
-      head: (ctx) =>
-        new steps.build.SynthStep(this, ctx, 'Synth', {
-          source: { mode: 'DYNAMIC', bucket: ctx.getOrCreateArtifactsBucket() },
+      head: (ctx) => {
+        this.artifactsBucket = ctx.getOrCreateArtifactsBucket();
+        return new steps.build.SynthStep(this, ctx, 'Synth', {
+          source: { mode: 'DYNAMIC', bucket: this.artifactsBucket },
           sourceUri: new lonicSfn.StateOutput('$states.input.payload.sourceUri'),
-          cdkAppDirectory: props.cdkAppDirectory,
-          cdkCliVersion: props.cdkCliVersion,
         })
         .next((o, vars) =>
             new steps.deploy.DeployStacksStep(this, ctx, 'Deploy', {
               deploymentWaves: o.DeploymentWaves,
               ArtifactUri: vars.ArtifactUri,
             })
-        ),
+        );
+      },
       stateMachineName: 'LonicAgent-DeploymentPipeline',
       timeout: cdk.Duration.minutes(60),
     });

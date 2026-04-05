@@ -357,16 +357,23 @@ test('API Gateway has command routes', () => {
   });
 });
 
+test('API Gateway has get-upload-url route', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'get-upload-url',
+  });
+});
+
 test('command routes use POST with IAM auth', () => {
   const template = createStack();
-  // 7 command routes + 1 pipeline route = 8 POST methods
+  // 7 command routes + 1 pipeline route + 1 get-upload-url route = 9 POST methods
   const postMethods = template.findResources('AWS::ApiGateway::Method', {
     Properties: {
       HttpMethod: 'POST',
       AuthorizationType: 'AWS_IAM',
     },
   });
-  expect(Object.keys(postMethods).length).toBe(8);
+  expect(Object.keys(postMethods).length).toBe(9);
 });
 
 // --- Outputs ---
@@ -472,6 +479,45 @@ test('start-execution state machine has SFN start permissions', () => {
       Statement: Match.arrayWith([
         Match.objectLike({
           Action: 'states:StartExecution',
+          Effect: 'Allow',
+        }),
+      ]),
+    }),
+  });
+});
+
+// --- Get Upload URL ---
+
+test('get-upload-url Lambda uses Node.js 22 on ARM64', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Runtime: 'nodejs22.x',
+    Architectures: ['arm64'],
+    Description: Match.stringLikeRegexp('presigned'),
+  });
+});
+
+test('get-upload-url Lambda has upload bucket environment variables', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Description: Match.stringLikeRegexp('presigned'),
+    Environment: {
+      Variables: Match.objectLike({
+        UPLOAD_BUCKET: Match.anyValue(),
+        UPLOAD_KEY_PREFIX: 'uploads',
+        URL_EXPIRATION_SECONDS: '900',
+      }),
+    },
+  });
+});
+
+test('get-upload-url Lambda has S3 PutObject permissions on upload prefix', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: Match.arrayWith(['s3:PutObject']),
           Effect: 'Allow',
         }),
       ]),

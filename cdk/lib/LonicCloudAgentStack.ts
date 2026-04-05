@@ -16,6 +16,7 @@ import { DetectDriftCommand } from './commands/detect-drift';
 import { GetChangesetCommand } from './commands/get-changeset';
 import { StartExecutionCommand } from './commands/start-execution';
 import { DeploymentPipeline } from './pipeline/deployment-pipeline';
+import { GetUploadUrl } from './lambdas/get-upload-url';
 
 export interface LonicCloudAgentStackProps extends cdk.StackProps {
   /** ARN of the IAM role in the lonic hosted backend account that is allowed to invoke this agent's API Gateway. */
@@ -26,17 +27,6 @@ export interface LonicCloudAgentStackProps extends cdk.StackProps {
   readonly agentVersion: string;
   /** Base URL of the lonic hosted backend (e.g. "https://api.lonic.dev"). */
   readonly callbackBaseUrl: string;
-  /**
-   * Path within the source archive where the CDK app lives (directory containing `cdk.json`).
-   * Used by the deployment pipeline's SynthStep.
-   * @default '.'
-   */
-  readonly cdkAppDirectory?: string;
-  /**
-   * CDK CLI version for the deployment pipeline's CodeBuild synth environment.
-   * @default 'latest'
-   */
-  readonly cdkCliVersion?: string;
 }
 
 export class LonicCloudAgentStack extends cdk.Stack {
@@ -45,6 +35,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
   public readonly eventReporter: EventReporter;
   public readonly healthCheck: HealthCheck;
   public readonly deploymentPipeline: DeploymentPipeline;
+  public readonly getUploadUrl: GetUploadUrl;
 
   constructor(scope: Construct, id: string, props: LonicCloudAgentStackProps) {
     super(scope, id, props);
@@ -153,8 +144,13 @@ export class LonicCloudAgentStack extends cdk.Stack {
 
     this.deploymentPipeline = new DeploymentPipeline(this, 'DeploymentPipeline', {
       api: this.agentApi.restApi,
-      cdkAppDirectory: props.cdkAppDirectory,
-      cdkCliVersion: props.cdkCliVersion,
+    });
+
+    // --- Upload URL generator (presigned S3 PUT for the pipeline artifacts bucket) ---
+
+    this.getUploadUrl = new GetUploadUrl(this, 'GetUploadUrl', {
+      api: this.agentApi.restApi,
+      uploadBucket: this.deploymentPipeline.artifactsBucket,
     });
 
     // --- Outputs ---
