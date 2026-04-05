@@ -18,18 +18,6 @@ function createStack(): Template {
   return Template.fromStack(stack);
 }
 
-function createStackWithPipeline(): Template {
-  const app = new cdk.App();
-  const stack = new LonicCloudAgentStack(app, 'TestStack', {
-    backendRoleArn: BACKEND_ROLE_ARN,
-    artifactBucket: ARTIFACT_BUCKET,
-    agentVersion: AGENT_VERSION,
-    callbackBaseUrl: CALLBACK_BASE_URL,
-    deploymentStacks: ['AppStack', 'NetworkStack'],
-    cdkAppDirectory: 'infra',
-  });
-  return Template.fromStack(stack);
-}
 
 // --- CfnParameters ---
 
@@ -270,9 +258,11 @@ test('health-check route exists at GET /health with IAM auth', () => {
 
 // --- State Machines ---
 
-test('creates four command state machines', () => {
+test('creates command and pipeline state machines', () => {
   const template = createStack();
-  template.resourceCountIs('AWS::StepFunctions::StateMachine', 4);
+  const stateMachines = template.findResources('AWS::StepFunctions::StateMachine');
+  // 7 command state machines + pipeline state machine + child express workflows from DeployStacksStep
+  expect(Object.keys(stateMachines).length).toBeGreaterThan(7);
 });
 
 test('describe-stacks state machine has CloudFormation permissions', () => {
@@ -353,18 +343,30 @@ test('API Gateway has command routes', () => {
   template.hasResourceProperties('AWS::ApiGateway::Resource', {
     PathPart: 'deploy-stacks',
   });
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'detect-drift',
+  });
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'get-changeset',
+  });
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'start-execution',
+  });
+  template.hasResourceProperties('AWS::ApiGateway::Resource', {
+    PathPart: 'deploy-pipeline',
+  });
 });
 
 test('command routes use POST with IAM auth', () => {
   const template = createStack();
-  // There should be POST methods for each command (4 total)
+  // 7 command routes + 1 pipeline route = 8 POST methods
   const postMethods = template.findResources('AWS::ApiGateway::Method', {
     Properties: {
       HttpMethod: 'POST',
       AuthorizationType: 'AWS_IAM',
     },
   });
-  expect(Object.keys(postMethods).length).toBe(4);
+  expect(Object.keys(postMethods).length).toBe(8);
 });
 
 // --- Outputs ---
@@ -385,13 +387,8 @@ test('outputs API URL, API ARN, and callback token secret ARN via SSM parameters
 
 // --- Deployment Pipeline ---
 
-test('pipeline is not created when deploymentStacks is omitted', () => {
-  const template = createStack();
-  template.resourceCountIs('AWS::StepFunctions::StateMachine', 4);
-});
-
 test('pipeline creates a CodeBuild project for CDK synth', () => {
-  const template = createStackWithPipeline();
+  const template = createStack();
   template.hasResourceProperties('AWS::CodeBuild::Project', {
     Description: Match.stringLikeRegexp('CDK'),
     Source: { Type: 'NO_SOURCE' },
@@ -399,7 +396,7 @@ test('pipeline creates a CodeBuild project for CDK synth', () => {
 });
 
 test('pipeline creates an artifacts S3 bucket', () => {
-  const template = createStackWithPipeline();
+  const template = createStack();
   template.hasResourceProperties('AWS::S3::Bucket', {
     PublicAccessBlockConfiguration: {
       BlockPublicAcls: true,
@@ -410,15 +407,8 @@ test('pipeline creates an artifacts S3 bucket', () => {
   });
 });
 
-test('pipeline creates additional state machines beyond the 4 commands', () => {
-  const template = createStackWithPipeline();
-  const stateMachines = template.findResources('AWS::StepFunctions::StateMachine');
-  // 4 command state machines + pipeline state machine + child express workflows from DeployStacksStep
-  expect(Object.keys(stateMachines).length).toBeGreaterThan(4);
-});
-
 test('pipeline state machine has CloudFormation CalledVia permissions', () => {
-  const template = createStackWithPipeline();
+  const template = createStack();
   template.hasResourceProperties('AWS::IAM::Policy', {
     PolicyDocument: Match.objectLike({
       Statement: Match.arrayWith([
@@ -437,9 +427,54 @@ test('pipeline state machine has CloudFormation CalledVia permissions', () => {
   });
 });
 
-test('pipeline has deploy-pipeline API route', () => {
-  const template = createStackWithPipeline();
-  template.hasResourceProperties('AWS::ApiGateway::Resource', {
-    PathPart: 'deploy-pipeline',
+// --- Phase 7: Additional stack management commands ---
+
+test('detect-drift state machine has drift detection permissions', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: [
+            'cloudformation:DetectStackDrift',
+            'cloudformation:DescribeStackDriftDetectionStatus',
+            'cloudformation:DescribeStackResourceDrifts',
+          ],
+          Effect: 'Allow',
+        }),
+      ]),
+    }),
+  });
+});
+
+test('get-changeset state machine has change set permissions', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: [
+            'cloudformation:CreateChangeSet',
+            'cloudformation:DescribeChangeSet',
+            'cloudformation:DeleteChangeSet',
+          ],
+          Effect: 'Allow',
+        }),
+      ]),
+    }),
+  });
+});
+
+test('start-execution state machine has SFN start permissions', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: 'states:StartExecution',
+          Effect: 'Allow',
+        }),
+      ]),
+    }),
   });
 });

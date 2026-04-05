@@ -6,31 +6,36 @@ import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
 import { addSyncExecutionRoute } from './api-sfn-integration';
 
-export interface GetExecutionStatusCommandProps {
+export interface StartExecutionCommandProps {
   readonly api: apigateway.RestApi;
 }
 
 /**
- * State machine that queries a Step Functions execution status.
+ * State machine that starts a Step Functions execution and returns
+ * the execution ARN. Thin wrapper around the StartExecution SDK call.
  *
  * Input:
  * ```json
  * {
  *   "commandId": "cmd-abc123",
  *   "callbackUrl": "https://...",
- *   "payload": { "executionArn": "arn:aws:states:..." }
+ *   "payload": {
+ *     "stateMachineArn": "arn:aws:states:...",
+ *     "input": { ... }
+ *   }
  * }
  * ```
  */
-export class GetExecutionStatusCommand extends Construct {
+export class StartExecutionCommand extends Construct {
   public readonly stateMachine: sfn.StateMachine;
 
-  constructor(scope: Construct, id: string, props: GetExecutionStatusCommandProps) {
+  constructor(scope: Construct, id: string, props: StartExecutionCommandProps) {
     super(scope, id);
 
     const definition = lonicSfn.Step.of(
-      new lonicSfn.tasks.DescribeExecutionStep(this, 'DescribeExecution', {
-        executionArn: new lonicSfn.StateOutput('$states.input.payload.executionArn'),
+      new lonicSfn.tasks.StartExecutionStep(this, 'StartExecution', {
+        stateMachineArn: new lonicSfn.StateOutput('$states.input.payload.stateMachineArn'),
+        input: new lonicSfn.StateOutput('$string($states.input.payload.input)'),
       }),
     );
 
@@ -38,14 +43,14 @@ export class GetExecutionStatusCommand extends Construct {
       definitionBody: sfn.DefinitionBody.fromChainable(definition.startState),
       stateMachineType: sfn.StateMachineType.EXPRESS,
       timeout: cdk.Duration.minutes(1),
-      stateMachineName: 'LonicAgent-GetExecutionStatus',
+      stateMachineName: 'LonicAgent-StartExecution',
     });
 
     this.stateMachine.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['states:DescribeExecution'],
+      actions: ['states:StartExecution'],
       resources: ['*'],
     }));
 
-    addSyncExecutionRoute(this, props.api, 'get-execution-status', this.stateMachine);
+    addSyncExecutionRoute(this, props.api, 'start-execution', this.stateMachine);
   }
 }

@@ -8,8 +8,6 @@ import { addStartExecutionRoute } from '../commands/api-sfn-integration';
 export interface DeploymentPipelineProps {
   /** API Gateway to add the deploy-pipeline route to. */
   readonly api: apigateway.RestApi;
-  /** CloudFormation stack names to deploy. All stacks in the list are deployed in parallel. */
-  readonly stacks: string[];
   /**
    * Path within the source archive where the CDK app lives (directory containing `cdk.json`).
    * @default '.'
@@ -24,14 +22,14 @@ export interface DeploymentPipelineProps {
 
 /**
  * A deployment pipeline that synthesizes a CDK application in CodeBuild
- * and deploys the resulting CloudFormation stacks via change sets.
+ * and deploys all discovered stacks in dependency order via change sets.
  *
  * Uses `Pipeline.linear()` from lonic-cdk-commons with:
  * - **SynthStep** — runs `cdk synth` in CodeBuild (DYNAMIC source mode;
  *   the S3 URI of the source archive is provided at execution time via
  *   `payload.sourceUri`).
- * - **DeployStacksStep** — deploys all stacks in parallel using the
- *   full change set flow (exists check → create → poll → execute → poll).
+ * - **DeployStacksStep** — deploys stacks using the `deploymentWaves`
+ *   output from SynthStep (sequential waves, parallel within each wave).
  *
  * Exposed at `POST /commands/deploy-pipeline` with IAM auth.
  *
@@ -52,21 +50,20 @@ export class DeploymentPipeline extends Construct {
   constructor(scope: Construct, id: string, props: DeploymentPipelineProps) {
     super(scope, id);
 
-    this.pipeline = pipeline.Pipeline.linear(this, 'Pipeline', (ctx) => {
-      const synth = new steps.build.SynthStep(this, ctx, 'Synth', {
-        source: { mode: 'DYNAMIC', bucket: ctx.getOrCreateArtifactsBucket() },
-        sourceUri: new lonicSfn.StateOutput('$states.input.payload.sourceUri'),
-        cdkAppDirectory: props.cdkAppDirectory,
-        cdkCliVersion: props.cdkCliVersion,
-      });
-
-      const deploy = new steps.deploy.DeployStacksStep(this, ctx, 'Deploy', {
-        stacks: props.stacks,
-        ArtifactUri: synth.ArtifactUri,
-      });
-
-      return [synth, deploy];
-    }, {
+    this.pipeline = new pipeline.Pipeline(this, 'Pipeline', {
+      head: (ctx) =>
+        new steps.build.SynthStep(this, ctx, 'Synth', {
+          source: { mode: 'DYNAMIC', bucket: ctx.getOrCreateArtifactsBucket() },
+          sourceUri: new lonicSfn.StateOutput('$states.input.payload.sourceUri'),
+          cdkAppDirectory: props.cdkAppDirectory,
+          cdkCliVersion: props.cdkCliVersion,
+        })
+        .next((o, vars) =>
+            new steps.deploy.DeployStacksStep(this, ctx, 'Deploy', {
+              deploymentWaves: o.DeploymentWaves,
+              ArtifactUri: vars.ArtifactUri,
+            })
+        ),
       stateMachineName: 'LonicAgent-DeploymentPipeline',
       timeout: cdk.Duration.minutes(60),
     });

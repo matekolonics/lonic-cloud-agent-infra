@@ -12,6 +12,9 @@ import { DescribeStacksCommand } from './commands/describe-stacks';
 import { GetExecutionStatusCommand } from './commands/get-execution-status';
 import { DestroyStacksCommand } from './commands/destroy-stacks';
 import { DeployStacksCommand } from './commands/deploy-stacks';
+import { DetectDriftCommand } from './commands/detect-drift';
+import { GetChangesetCommand } from './commands/get-changeset';
+import { StartExecutionCommand } from './commands/start-execution';
 import { DeploymentPipeline } from './pipeline/deployment-pipeline';
 
 export interface LonicCloudAgentStackProps extends cdk.StackProps {
@@ -24,20 +27,13 @@ export interface LonicCloudAgentStackProps extends cdk.StackProps {
   /** Base URL of the lonic hosted backend (e.g. "https://api.lonic.dev"). */
   readonly callbackBaseUrl: string;
   /**
-   * CloudFormation stack names for the deployment pipeline to deploy.
-   * When provided, a Pipeline (SynthStep → DeployStacksStep) is created
-   * with a `POST /commands/deploy-pipeline` route.
-   */
-  readonly deploymentStacks?: string[];
-  /**
-   * Path within the source archive where the CDK app lives.
-   * Only used when `deploymentStacks` is provided.
+   * Path within the source archive where the CDK app lives (directory containing `cdk.json`).
+   * Used by the deployment pipeline's SynthStep.
    * @default '.'
    */
   readonly cdkAppDirectory?: string;
   /**
-   * CDK CLI version for the synth CodeBuild environment.
-   * Only used when `deploymentStacks` is provided.
+   * CDK CLI version for the deployment pipeline's CodeBuild synth environment.
    * @default 'latest'
    */
   readonly cdkCliVersion?: string;
@@ -48,7 +44,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
   public readonly registration: AgentRegistration;
   public readonly eventReporter: EventReporter;
   public readonly healthCheck: HealthCheck;
-  public readonly deploymentPipeline?: DeploymentPipeline;
+  public readonly deploymentPipeline: DeploymentPipeline;
 
   constructor(scope: Construct, id: string, props: LonicCloudAgentStackProps) {
     super(scope, id, props);
@@ -141,16 +137,25 @@ export class LonicCloudAgentStack extends cdk.Stack {
       api: this.agentApi.restApi,
     });
 
+    new DetectDriftCommand(this, 'DetectDrift', {
+      api: this.agentApi.restApi,
+    });
+
+    new GetChangesetCommand(this, 'GetChangeset', {
+      api: this.agentApi.restApi,
+    });
+
+    new StartExecutionCommand(this, 'StartExecution', {
+      api: this.agentApi.restApi,
+    });
+
     // --- Deployment Pipeline (SynthStep → DeployStacksStep) ---
 
-    if (props.deploymentStacks && props.deploymentStacks.length > 0) {
-      this.deploymentPipeline = new DeploymentPipeline(this, 'DeploymentPipeline', {
-        api: this.agentApi.restApi,
-        stacks: props.deploymentStacks,
-        cdkAppDirectory: props.cdkAppDirectory,
-        cdkCliVersion: props.cdkCliVersion,
-      });
-    }
+    this.deploymentPipeline = new DeploymentPipeline(this, 'DeploymentPipeline', {
+      api: this.agentApi.restApi,
+      cdkAppDirectory: props.cdkAppDirectory,
+      cdkCliVersion: props.cdkCliVersion,
+    });
 
     // --- Outputs ---
 

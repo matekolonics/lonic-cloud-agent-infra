@@ -29,77 +29,44 @@ export class DestroyStacksCommand extends Construct {
   constructor(scope: Construct, id: string, props: DestroyStacksCommandProps) {
     super(scope, id);
 
-    const command = this;
-
     class Processor extends lonicSfn.MapItemProcessor<{ StackName: lonicSfn.StateOutput }> {
       constructor(s: Construct, pid: string, item: { StackName: lonicSfn.StateOutput }, vars: lonicSfn.VariableScope) {
         super(s, pid, item, vars);
 
-        const stackName = vars.declare('StackName');
-
         this.defineStep(
           lonicSfn.Step.of(
-            new sfn.CustomState(this, 'DeleteStack', {
-              stateJson: {
-                Type: 'Task',
-                Resource: 'arn:aws:states:::aws-sdk:cloudformation:deleteStack',
-                Arguments: {
-                  StackName: item.StackName.resolveJsonata(),
-                },
-                Assign: vars.buildAssign({
-                  StackName: item.StackName.resolveJsonata(),
-                }),
-                Output: {},
-              },
-            }),
-            {},
-          )
-          .next(() =>
-            lonicSfn.Step.of(
-              sfn.Wait.jsonata(this, 'WaitForDelete', {
-                time: sfn.WaitTime.duration(cdk.Duration.seconds(10)),
+              sfn.Pass.jsonata(this, 'AssignVars', {
+                  assign: vars.buildAssign({ StackName: item.StackName.resolveJsonata() }),
               }),
               {},
+              {
+                  StackName: vars.declare('StackName'),
+              }
+          )
+          .next((_, vars) =>
+            lonicSfn.Step.of(
+              new lonicSfn.tasks.DeleteStackStep(this, 'DeleteStack', {
+                stackName: vars.StackName,
+              }),
             )
-            .next((_, __, waitStep) =>
-              lonicSfn.Step.of(
-                new sfn.CustomState(this, 'CheckDeleteStatus', {
-                  stateJson: {
-                    Type: 'Task',
-                    Resource: 'arn:aws:states:::aws-sdk:cloudformation:describeStacks',
-                    Arguments: {
-                      StackName: stackName.resolveJsonata(),
-                    },
-                    Output: {
-                      status: '{% $states.result.Stacks[0].StackStatus %}',
-                    },
-                    Catch: [{
-                      ErrorEquals: ['CloudFormation.CloudFormationException'],
-                      Comment: 'Stack no longer exists — delete succeeded',
-                      Output: {},
-                      Next: 'DeleteSucceeded',
-                    }],
-                  },
+          )
+          .next((_, vars) =>
+            lonicSfn.PollUntilStep.wrap(this, 'PollDeletion', {
+              interval: cdk.Duration.seconds(10),
+              check: lonicSfn.Step.of(
+                new lonicSfn.tasks.GetStackStep(this, 'CheckDeleteStatus', {
+                  stackName: vars.StackName,
                 }),
-                { status: new lonicSfn.StateOutput('status') },
-              )
-              .choice(sfn.Choice.jsonata(this, 'IsDeleting', {}))
-              .branch(
-                o => sfn.Condition.jsonata(`{% ${o.status.expression} = "DELETE_IN_PROGRESS" %}`),
-                () => waitStep,
-              )
-              .branch(
-                o => sfn.Condition.jsonata(`{% ${o.status.expression} = "DELETE_COMPLETE" %}`),
-                () => sfn.Succeed.jsonata(this, 'DeleteSucceeded', {}),
-              )
-              .defaultBranch(() =>
-                new sfn.Fail(this, 'DeleteFailed', {
-                  cause: 'Stack deletion failed',
-                  error: 'DELETE_FAILED',
-                }),
-              )
-              .build()
-            )
+              ),
+              successWhen: o => sfn.Condition.jsonata(
+                `{% ${o.StackStatus.expression} = "DELETE_COMPLETE" or ${o.StackStatus.expression} = "DOES_NOT_EXIST" %}`,
+              ),
+              failWhen: o => sfn.Condition.jsonata(
+                `{% ${o.StackStatus.expression} = "DELETE_FAILED" %}`,
+              ),
+              failError: 'DELETE_FAILED',
+              failCause: 'Stack deletion failed',
+            })
           )
         );
       }
