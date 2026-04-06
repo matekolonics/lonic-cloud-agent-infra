@@ -4,10 +4,11 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
-import { addStartExecutionRoute } from './api-sfn-integration';
+import { CommandQueue } from './command-queue';
 
 export interface DetectDriftCommandProps {
   readonly api: apigateway.RestApi;
+  readonly commandQueue: CommandQueue;
 }
 
 /**
@@ -76,6 +77,6 @@ export class DetectDriftCommand extends Construct {
       resources: ['*'],
     }));
 
-    addStartExecutionRoute(this, props.api, 'detect-drift', this.stateMachine);
+    props.commandQueue.addQueuedRoute(this, 'detect-drift', this.stateMachine);
   }
 }

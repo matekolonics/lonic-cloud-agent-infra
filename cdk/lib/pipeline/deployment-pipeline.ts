@@ -4,11 +4,13 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { pipeline, steps, sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
-import { addStartExecutionRoute } from '../commands/api-sfn-integration';
+import { CommandQueue } from '../commands/command-queue';
 
 export interface DeploymentPipelineProps {
   /** API Gateway to add the deploy-pipeline route to. */
   readonly api: apigateway.RestApi;
+  /** Shared command queue for async execution. */
+  readonly commandQueue: CommandQueue;
 }
 
 /**
@@ -72,6 +74,6 @@ export class DeploymentPipeline extends Construct {
       },
     }));
 
-    addStartExecutionRoute(this, props.api, 'deploy-pipeline', this.pipeline.stateMachine);
+    props.commandQueue.addQueuedRoute(this, 'deploy-pipeline', this.pipeline.stateMachine);
   }
 }

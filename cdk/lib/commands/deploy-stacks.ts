@@ -4,10 +4,11 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
-import { addStartExecutionRoute } from './api-sfn-integration';
+import { CommandQueue } from './command-queue';
 
 export interface DeployStacksCommandProps {
   readonly api: apigateway.RestApi;
+  readonly commandQueue: CommandQueue;
 }
 
 /**
@@ -34,7 +35,7 @@ export class DeployStacksCommand extends Construct {
   constructor(scope: Construct, id: string, props: DeployStacksCommandProps) {
     super(scope, id);
 
-    const changeSetNameExpr = '"lonic-deploy-" & $replace($states.context.Execution.Name, ":", "-")';
+    const changeSetName = new lonicSfn.StateOutput('"lonic-deploy-" & $replace($states.context.Execution.Name, ":", "-")');
 
     class Processor extends lonicSfn.MapItemProcessor<{
       StackName: lonicSfn.StateOutput;
@@ -62,153 +63,73 @@ export class DeployStacksCommand extends Construct {
             }),
             {},
           )
-          // Check if stack exists — catch determines CREATE vs UPDATE
+          // Check if stack exists (returns DOES_NOT_EXIST for missing stacks)
           .next(() =>
             lonicSfn.Step.of(
-              new sfn.CustomState(this, 'DescribeStack', {
-                stateJson: {
-                  Type: 'Task',
-                  Resource: 'arn:aws:states:::aws-sdk:cloudformation:describeStacks',
-                  Arguments: {
-                    StackName: stackName.resolveJsonata(),
-                  },
-                  Output: { changeSetType: 'UPDATE' },
-                  Catch: [{
-                    ErrorEquals: ['CloudFormation.CloudFormationException'],
-                    Comment: 'Stack does not exist',
-                    Output: { changeSetType: 'CREATE' },
-                    Next: 'CreateChangeSet',
-                  }],
-                },
+              new lonicSfn.tasks.GetStackStep(this, 'CheckExists', {
+                stackName,
               }),
-              {},
             )
           )
-          // Create change set (both success and catch paths arrive here)
-          .next(() =>
+          // Create change set (CREATE for new stacks, UPDATE for existing)
+          .next(o =>
             lonicSfn.Step.of(
-              new sfn.CustomState(this, 'CreateChangeSet', {
-                stateJson: {
-                  Type: 'Task',
-                  Resource: 'arn:aws:states:::aws-sdk:cloudformation:createChangeSet',
-                  Arguments: {
-                    StackName: stackName.resolveJsonata(),
-                    ChangeSetName: `{% ${changeSetNameExpr} %}`,
-                    ChangeSetType: '{% $states.input.changeSetType %}',
-                    TemplateURL: `{% ${templateBaseUrl.expression} & "/" & ${stackName.expression} & ".template.json" %}`,
-                    Capabilities: [
-                      'CAPABILITY_NAMED_IAM',
-                      'CAPABILITY_IAM',
-                      'CAPABILITY_AUTO_EXPAND',
-                    ],
-                  },
-                  Output: {},
-                },
+              new lonicSfn.tasks.CreateChangeSetStep(this, 'CreateChangeSet', {
+                stackName,
+                changeSetName,
+                exists: new lonicSfn.StateOutput(`${o.StackStatus.expression} != "DOES_NOT_EXIST"`),
+                templateUrl: new lonicSfn.StateOutput(`${templateBaseUrl.expression} & "/" & ${stackName.expression} & ".template.json"`),
+                capabilities: ['CAPABILITY_NAMED_IAM', 'CAPABILITY_IAM', 'CAPABILITY_AUTO_EXPAND'],
               }),
-              {},
             )
           )
-          // Poll change set status
+          // Poll change set until ready
+          .next(() =>
+            lonicSfn.PollUntilStep.wrap(this, 'PollChangeSet', {
+              interval: cdk.Duration.seconds(5),
+              check: lonicSfn.Step.of(
+                new lonicSfn.tasks.GetChangeSetStatusStep(this, 'DescribeChangeSet', {
+                  stackName,
+                  changeSetName,
+                }),
+              ),
+              successWhen: o => sfn.Condition.jsonata(
+                `{% ${o.Status.expression} = "CREATE_COMPLETE" %}`,
+              ),
+              failWhen: o => sfn.Condition.jsonata(
+                `{% ${o.Status.expression} = "FAILED" %}`,
+              ),
+              failError: 'CHANGE_SET_FAILED',
+              failCause: 'Change set creation failed',
+            })
+          )
+          // Execute the change set
           .next(() =>
             lonicSfn.Step.of(
-              sfn.Wait.jsonata(this, 'WaitForChangeSet', {
-                time: sfn.WaitTime.duration(cdk.Duration.seconds(5)),
+              new lonicSfn.tasks.ExecuteChangeSetStep(this, 'ExecuteChangeSet', {
+                stackName,
+                changeSetName,
               }),
-              {},
             )
-            .next((_, __, waitCs) =>
-              lonicSfn.Step.of(
-                new sfn.CustomState(this, 'DescribeChangeSet', {
-                  stateJson: {
-                    Type: 'Task',
-                    Resource: 'arn:aws:states:::aws-sdk:cloudformation:describeChangeSet',
-                    Arguments: {
-                      ChangeSetName: `{% ${changeSetNameExpr} %}`,
-                      StackName: stackName.resolveJsonata(),
-                    },
-                    Output: {
-                      status: '{% $states.result.Status %}',
-                    },
-                  },
+          )
+          // Poll until stack deployment completes
+          .next(() =>
+            lonicSfn.PollUntilStep.wrap(this, 'PollDeploy', {
+              interval: cdk.Duration.seconds(10),
+              check: lonicSfn.Step.of(
+                new lonicSfn.tasks.GetStackStep(this, 'CheckDeployStatus', {
+                  stackName,
                 }),
-                { status: new lonicSfn.StateOutput('status') },
-              )
-              .choice(sfn.Choice.jsonata(this, 'IsChangeSetReady', {}))
-              .branch(
-                o => sfn.Condition.jsonata(`{% ${o.status.expression} = "FAILED" %}`),
-                () => new sfn.Fail(this, 'ChangeSetFailed', {
-                  cause: 'Change set creation failed',
-                  error: 'CHANGE_SET_FAILED',
-                }),
-              )
-              .branch(
-                o => sfn.Condition.jsonata(`{% ${o.status.expression} != "CREATE_COMPLETE" %}`),
-                () => waitCs,
-              )
-              // CREATE_COMPLETE — execute change set and poll deploy status
-              .defaultBranch(() =>
-                lonicSfn.Step.of(
-                  new sfn.CustomState(this, 'ExecuteChangeSet', {
-                    stateJson: {
-                      Type: 'Task',
-                      Resource: 'arn:aws:states:::aws-sdk:cloudformation:executeChangeSet',
-                      Arguments: {
-                        ChangeSetName: `{% ${changeSetNameExpr} %}`,
-                        StackName: stackName.resolveJsonata(),
-                      },
-                      Output: {},
-                    },
-                  }),
-                  {},
-                )
-                .next(() =>
-                  lonicSfn.Step.of(
-                    sfn.Wait.jsonata(this, 'WaitForDeploy', {
-                      time: sfn.WaitTime.duration(cdk.Duration.seconds(10)),
-                    }),
-                    {},
-                  )
-                  .next((_, __, waitDeploy) =>
-                    lonicSfn.Step.of(
-                      new sfn.CustomState(this, 'CheckStackStatus', {
-                        stateJson: {
-                          Type: 'Task',
-                          Resource: 'arn:aws:states:::aws-sdk:cloudformation:describeStacks',
-                          Arguments: {
-                            StackName: stackName.resolveJsonata(),
-                          },
-                          Output: {
-                            status: '{% $states.result.Stacks[0].StackStatus %}',
-                          },
-                        },
-                      }),
-                      { status: new lonicSfn.StateOutput('status') },
-                    )
-                    .choice(sfn.Choice.jsonata(this, 'IsDeployComplete', {}))
-                    .branch(
-                      o => sfn.Condition.jsonata(
-                        `{% ${o.status.expression} in ["CREATE_COMPLETE", "UPDATE_COMPLETE"] %}`,
-                      ),
-                      () => sfn.Succeed.jsonata(this, 'DeploySucceeded', {}),
-                    )
-                    .branch(
-                      o => sfn.Condition.jsonata(
-                        `{% ${o.status.expression} in ["CREATE_IN_PROGRESS", "UPDATE_IN_PROGRESS", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"] %}`,
-                      ),
-                      () => waitDeploy,
-                    )
-                    .defaultBranch(() =>
-                      new sfn.Fail(this, 'DeployFailed', {
-                        cause: 'Stack deployment failed',
-                        error: 'DEPLOY_FAILED',
-                      }),
-                    )
-                    .build()
-                  )
-                )
-              )
-              .build()
-            )
+              ),
+              successWhen: o => sfn.Condition.jsonata(
+                `{% ${o.StackStatus.expression} in ["CREATE_COMPLETE", "UPDATE_COMPLETE"] %}`,
+              ),
+              failWhen: o => sfn.Condition.jsonata(
+                `{% not (${o.StackStatus.expression} in ["CREATE_IN_PROGRESS", "UPDATE_IN_PROGRESS", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"]) %}`,
+              ),
+              failError: 'DEPLOY_FAILED',
+              failCause: 'Stack deployment failed',
+            })
           )
         );
       }
@@ -250,6 +171,6 @@ export class DeployStacksCommand extends Construct {
       },
     }));
 
-    addStartExecutionRoute(this, props.api, 'deploy-stacks', this.stateMachine);
+    props.commandQueue.addQueuedRoute(this, 'deploy-stacks', this.stateMachine);
   }
 }

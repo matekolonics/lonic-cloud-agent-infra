@@ -4,10 +4,11 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
-import { addStartExecutionRoute } from './api-sfn-integration';
+import { CommandQueue } from './command-queue';
 
 export interface GetChangesetCommandProps {
   readonly api: apigateway.RestApi;
+  readonly commandQueue: CommandQueue;
 }
 
 /**
@@ -88,6 +89,6 @@ export class GetChangesetCommand extends Construct {
       resources: ['*'],
     }));
 
-    addStartExecutionRoute(this, props.api, 'get-changeset', this.stateMachine);
+    props.commandQueue.addQueuedRoute(this, 'get-changeset', this.stateMachine);
   }
 }

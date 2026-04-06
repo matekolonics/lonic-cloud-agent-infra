@@ -4,10 +4,11 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
-import { addStartExecutionRoute } from './api-sfn-integration';
+import { CommandQueue } from './command-queue';
 
 export interface SelfUpdateCommandProps {
   readonly api: apigateway.RestApi;
+  readonly commandQueue: CommandQueue;
 }
 
 /**
@@ -79,42 +80,24 @@ export class SelfUpdateCommand extends Construct {
         }),
       )
     )
-    // Poll until stack update completes (manual loop to avoid duplicate
-    // state names from a second PollUntilStep in the same state machine)
+    // Poll until stack update completes
     .next(() =>
-      lonicSfn.Step.of(
-        sfn.Wait.jsonata(this, 'WaitForUpdate', {
-          time: sfn.WaitTime.duration(cdk.Duration.seconds(10)),
-        }),
-        {},
-      )
-      .next((_, __, waitStep) =>
-        lonicSfn.Step.of(
+      lonicSfn.PollUntilStep.wrap(this, 'PollUpdate', {
+        interval: cdk.Duration.seconds(10),
+        check: lonicSfn.Step.of(
           new lonicSfn.tasks.GetStackStep(this, 'CheckStackStatus', {
             stackName,
           }),
-        )
-        .choice(sfn.Choice.jsonata(this, 'IsUpdateComplete', {}))
-        .branch(
-          o => sfn.Condition.jsonata(
-            `{% ${o.StackStatus.expression} in ["UPDATE_COMPLETE"] %}`,
-          ),
-          () => sfn.Succeed.jsonata(this, 'UpdateSucceeded', {}),
-        )
-        .branch(
-          o => sfn.Condition.jsonata(
-            `{% ${o.StackStatus.expression} in ["UPDATE_IN_PROGRESS", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"] %}`,
-          ),
-          () => waitStep,
-        )
-        .defaultBranch(() =>
-          new sfn.Fail(this, 'UpdateFailed', {
-            cause: 'Agent stack update failed',
-            error: 'UPDATE_FAILED',
-          }),
-        )
-        .build()
-      )
+        ),
+        successWhen: o => sfn.Condition.jsonata(
+          `{% ${o.StackStatus.expression} = "UPDATE_COMPLETE" %}`,
+        ),
+        failWhen: o => sfn.Condition.jsonata(
+          `{% not (${o.StackStatus.expression} in ["UPDATE_IN_PROGRESS", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"]) %}`,
+        ),
+        failError: 'UPDATE_FAILED',
+        failCause: 'Agent stack update failed',
+      })
     );
 
     this.stateMachine = new sfn.StateMachine(this, 'StateMachine', {
@@ -144,6 +127,6 @@ export class SelfUpdateCommand extends Construct {
       },
     }));
 
-    addStartExecutionRoute(this, props.api, 'self-update', this.stateMachine);
+    props.commandQueue.addQueuedRoute(this, 'self-update', this.stateMachine);
   }
 }

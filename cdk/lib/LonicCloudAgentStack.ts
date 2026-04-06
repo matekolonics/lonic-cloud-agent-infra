@@ -1,4 +1,6 @@
 import * as cdk from 'aws-cdk-lib/core';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cw_actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -11,6 +13,7 @@ import { HealthCheck } from './lambdas/health-check';
 import { DescribeStacksCommand } from './commands/describe-stacks';
 import { GetExecutionStatusCommand } from './commands/get-execution-status';
 import { DestroyStacksCommand } from './commands/destroy-stacks';
+import { CommandQueue } from './commands/command-queue';
 import { DeployStacksCommand } from './commands/deploy-stacks';
 import { DetectDriftCommand } from './commands/detect-drift';
 import { GetChangesetCommand } from './commands/get-changeset';
@@ -37,6 +40,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
   public readonly registration: AgentRegistration;
   public readonly eventReporter: EventReporter;
   public readonly healthCheck: HealthCheck;
+  public readonly commandQueue: CommandQueue;
   public readonly deploymentPipeline: DeploymentPipeline;
   public readonly getUploadUrl: GetUploadUrl;
   public readonly runtimeErrorReporter: RuntimeErrorReporter;
@@ -114,6 +118,12 @@ export class LonicCloudAgentStack extends cdk.Stack {
       api: this.agentApi.restApi,
     });
 
+    // --- Command Queue (SQS-backed async command dispatch) ---
+
+    this.commandQueue = new CommandQueue(this, 'CommandQueue', {
+      api: this.agentApi.restApi,
+    });
+
     // --- Commands (Step Functions state machines) ---
 
     new DescribeStacksCommand(this, 'DescribeStacks', {
@@ -126,18 +136,22 @@ export class LonicCloudAgentStack extends cdk.Stack {
 
     new DestroyStacksCommand(this, 'DestroyStacks', {
       api: this.agentApi.restApi,
+      commandQueue: this.commandQueue,
     });
 
     new DeployStacksCommand(this, 'DeployStacks', {
       api: this.agentApi.restApi,
+      commandQueue: this.commandQueue,
     });
 
     new DetectDriftCommand(this, 'DetectDrift', {
       api: this.agentApi.restApi,
+      commandQueue: this.commandQueue,
     });
 
     new GetChangesetCommand(this, 'GetChangeset', {
       api: this.agentApi.restApi,
+      commandQueue: this.commandQueue,
     });
 
     new StartExecutionCommand(this, 'StartExecution', {
@@ -146,12 +160,14 @@ export class LonicCloudAgentStack extends cdk.Stack {
 
     new SelfUpdateCommand(this, 'SelfUpdate', {
       api: this.agentApi.restApi,
+      commandQueue: this.commandQueue,
     });
 
     // --- Deployment Pipeline (SynthStep → DeployStacksStep) ---
 
     this.deploymentPipeline = new DeploymentPipeline(this, 'DeploymentPipeline', {
       api: this.agentApi.restApi,
+      commandQueue: this.commandQueue,
     });
 
     // --- Synth Commands (CodeBuild-based CDK synthesis) ---
@@ -161,6 +177,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
       artifactsBucket: this.deploymentPipeline.artifactsBucket,
       routePath: 'synth-pipeline',
       stateMachineName: 'LonicAgent-SynthPipeline',
+      commandQueue: this.commandQueue,
     });
 
     new SynthCommand(this, 'SynthInfrastructure', {
@@ -168,6 +185,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
       artifactsBucket: this.deploymentPipeline.artifactsBucket,
       routePath: 'synth-infrastructure',
       stateMachineName: 'LonicAgent-SynthInfrastructure',
+      commandQueue: this.commandQueue,
     });
 
     new SynthCommand(this, 'SynthCdkProject', {
@@ -175,6 +193,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
       artifactsBucket: this.deploymentPipeline.artifactsBucket,
       routePath: 'synth-cdk-project',
       stateMachineName: 'LonicAgent-SynthCdkProject',
+      commandQueue: this.commandQueue,
     });
 
     new SynthCommand(this, 'DiscoverStacks', {
@@ -182,6 +201,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
       artifactsBucket: this.deploymentPipeline.artifactsBucket,
       routePath: 'discover-stacks',
       stateMachineName: 'LonicAgent-DiscoverStacks',
+      commandQueue: this.commandQueue,
     });
 
     // --- Upload URL generator (presigned S3 PUT for the pipeline artifacts bucket) ---
@@ -199,11 +219,28 @@ export class LonicCloudAgentStack extends cdk.Stack {
         this.eventReporter.fn,
         this.healthCheck.fn,
         this.getUploadUrl.fn,
+        this.commandQueue.consumerFn,
       ],
       callbackTokenSecret: this.registration.callbackTokenSecret,
       callbackBaseUrl: props.callbackBaseUrl,
       agentIdParam,
     });
+
+    // --- DLQ Alarm (wired to the runtime error reporter's SNS topic) ---
+
+    const dlqAlarm = new cloudwatch.Alarm(this, 'CommandQueueDlqAlarm', {
+      metric: this.commandQueue.dlq.metricApproximateNumberOfMessagesVisible({
+        period: cdk.Duration.minutes(1),
+        statistic: 'Maximum',
+      }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      alarmDescription: 'Messages in the command queue DLQ — commands failed to start execution',
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    dlqAlarm.addAlarmAction(new cw_actions.SnsAction(this.runtimeErrorReporter.topic));
+    dlqAlarm.addOkAction(new cw_actions.SnsAction(this.runtimeErrorReporter.topic));
 
     // --- Outputs ---
 

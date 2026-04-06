@@ -146,14 +146,19 @@ API Gateway routes → state machines (service integration via `addStartExecutio
 
 ### Phase 5: Multi-region and multi-account 🔶 (partially complete)
 
-- Support deploying agent stacks across multiple regions/accounts ❌
+- Support deploying agent stacks across multiple regions/accounts ❌ (commons task filed for cross-region CloudFormation deploy)
 - Agent registration mechanism (calls hosted backend on stack deploy/update) ✅ (implemented as custom resource in Phase 1)
-- Optional SQS-based command queue for agent pooling ❌
+- **SQS command queue** — shared SQS queue between API Gateway and async Step Functions commands ✅
+  - API Gateway → SQS (native integration) → consumer Lambda → StartExecution
+  - Dead-letter queue with 3 retries, 14-day retention
+  - DLQ alarm wired to runtime error reporter SNS topic
+  - Consumer Lambda monitored by runtime error reporter
+  - Async commands return 202 Accepted; sync commands (describe-stacks, get-execution-status, start-execution) unchanged
 - Wire `AGENT_ID` env var ✅ (wired to event-reporter, health-check, and registration)
 
 **Depends on:** Code Phase 4, Infra Phase 4
 
-**Outcome:** Complex AWS topologies (Organizations, multi-region) are supported.
+**Outcome:** Complex AWS topologies (Organizations, multi-region) are supported. Command execution is resilient to bursts via SQS backpressure.
 
 ---
 
@@ -204,7 +209,7 @@ Code Phase 5 ✅ (command types)     ▼
                                 Infra Phase 4 ✅ (health, self-update, runtime errors)
                                     │
                                     ▼
-Code Phase 4 ✅ ───────────────► Infra Phase 5 🔶 (registration ✅, multi-region ❌)
+Code Phase 4 ✅ ───────────────► Infra Phase 5 🔶 (registration ✅, SQS ✅, multi-region ❌)
 
 Code Phase 6 ✅ (build log) ─────► Infra Phase 6 ✅ (synth/CodeBuild commands)
 ```
@@ -213,8 +218,7 @@ Code Phase 6 ✅ (build log) ─────► Infra Phase 6 ✅ (synth/CodeBui
 
 ## Remaining work (priority order)
 
-1. **Multi-region deployment support** (Phase 5) — cross-account/region patterns
-2. **SQS command queue** (Phase 5) — agent pooling for high-throughput scenarios
+1. **Multi-region deployment support** (Phase 5) — cross-account/region patterns (commons task filed for cross-region CloudFormation deploy)
 
 ---
 

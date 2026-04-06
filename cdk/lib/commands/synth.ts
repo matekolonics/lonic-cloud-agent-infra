@@ -4,7 +4,7 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
-import { addStartExecutionRoute } from './api-sfn-integration';
+import { CommandQueue } from './command-queue';
 
 export interface SynthCommandProps {
   /** API Gateway to add the route to. */
@@ -15,6 +15,8 @@ export interface SynthCommandProps {
   readonly routePath: string;
   /** Step Functions state machine name. */
   readonly stateMachineName: string;
+  /** Shared command queue for async execution. */
+  readonly commandQueue: CommandQueue;
 }
 
 /**
@@ -56,6 +58,6 @@ export class SynthCommand extends Construct {
       stateMachineName: props.stateMachineName,
     });
 
-    addStartExecutionRoute(this, props.api, props.routePath, this.stateMachine);
+    props.commandQueue.addQueuedRoute(this, props.routePath, this.stateMachine);
   }
 }

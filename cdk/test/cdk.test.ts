@@ -620,7 +620,7 @@ test('runtime error reporter Lambda has callback environment variables', () => {
 
 test('runtime error reporter creates CloudWatch alarms for monitored Lambdas', () => {
   const template = createStack();
-  // 3 monitored functions: event-reporter, health-check, get-upload-url
+  // 4 monitored functions: event-reporter, health-check, get-upload-url, command-queue consumer
   const alarms = template.findResources('AWS::CloudWatch::Alarm', {
     Properties: {
       ComparisonOperator: 'GreaterThanOrEqualToThreshold',
@@ -629,7 +629,7 @@ test('runtime error reporter creates CloudWatch alarms for monitored Lambdas', (
       Namespace: 'AWS/Lambda',
     },
   });
-  expect(Object.keys(alarms).length).toBe(3);
+  expect(Object.keys(alarms).length).toBe(4);
 });
 
 test('runtime error reporter SNS topic has Lambda subscription', () => {
@@ -730,4 +730,66 @@ test('synth commands create CodeBuild projects', () => {
     },
   });
   expect(Object.keys(projects).length).toBe(5);
+});
+
+// --- Command Queue ---
+
+test('creates an SQS command queue with a dead-letter queue', () => {
+  const template = createStack();
+  const queues = template.findResources('AWS::SQS::Queue');
+  // Main queue + DLQ
+  expect(Object.keys(queues).length).toBe(2);
+  // Main queue should have a RedrivePolicy pointing to the DLQ
+  const withRedrive = Object.values(queues).filter(
+    (q: any) => q.Properties?.RedrivePolicy,
+  );
+  expect(withRedrive.length).toBe(1);
+  expect((withRedrive[0] as any).Properties.RedrivePolicy.maxReceiveCount).toBe(3);
+});
+
+test('command queue consumer Lambda uses Node.js 22 on ARM64', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::Lambda::Function', {
+    Runtime: 'nodejs22.x',
+    Architectures: ['arm64'],
+    Description: Match.stringLikeRegexp('command.*queue'),
+  });
+});
+
+test('command queue consumer has SFN StartExecution permission', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::IAM::Policy', {
+    PolicyDocument: Match.objectLike({
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: 'states:StartExecution',
+          Effect: 'Allow',
+          Resource: Match.objectLike({
+            'Fn::Join': Match.arrayWith([
+              Match.arrayWith([
+                Match.stringLikeRegexp('LonicAgent-'),
+              ]),
+            ]),
+          }),
+        }),
+      ]),
+    }),
+  });
+});
+
+test('command queue consumer has SQS event source mapping', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+    BatchSize: 1,
+  });
+});
+
+test('DLQ has a CloudWatch alarm wired to the error reporting topic', () => {
+  const template = createStack();
+  template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+    ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+    Threshold: 1,
+    MetricName: 'ApproximateNumberOfMessagesVisible',
+    Namespace: 'AWS/SQS',
+  });
 });
