@@ -4,6 +4,7 @@ import * as cw_actions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { constructs as lonicConstructs } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
 import { AgentApi } from './api/agent-api';
@@ -23,6 +24,9 @@ import { SynthCommand } from './commands/synth';
 import { DeploymentPipeline } from './pipeline/deployment-pipeline';
 import { GetUploadUrl } from './lambdas/get-upload-url';
 import { RuntimeErrorReporter } from './lambdas/runtime-error-reporter';
+import { ReviewPackager } from './review/review-packager';
+import { ReviewResultHandler } from './review/review-result-handler';
+import { ConfigureReview } from './review/configure-review';
 
 export interface LonicCloudAgentStackProps extends cdk.StackProps {
   /** ARN of the IAM role in the lonic hosted backend account that is allowed to invoke this agent's API Gateway. */
@@ -64,6 +68,13 @@ export class LonicCloudAgentStack extends cdk.Stack {
       type: 'String',
       description: 'Single-use setup token for agent registration. Issued by the lonic dashboard.',
       default: '{{SETUP_TOKEN}}',
+      noEcho: true,
+    });
+
+    const gitTokenParam = new cdk.CfnParameter(this, 'GitToken', {
+      type: 'String',
+      description: 'Secrets Manager ARN for the git provider access token (for cloning and posting review comments).',
+      default: '',
       noEcho: true,
     });
 
@@ -211,6 +222,53 @@ export class LonicCloudAgentStack extends cdk.Stack {
       uploadBucket: this.deploymentPipeline.artifactsBucket,
     });
 
+    // --- AI Code Review (EventBridge subscription + packaging + result handler) ---
+    // Webhook reception and normalization are handled by the lonic-cdk-commons
+    // webhook infrastructure singleton. Pull Request events arrive on EventBridge
+    // with source "lonic.webhook" and detailType "Pull Request".
+
+    const gitTokenSecret = secretsmanager.Secret.fromSecretCompleteArn(
+      this, 'GitTokenSecret', gitTokenParam.valueAsString,
+    );
+
+    const reviewPackager = new ReviewPackager(this, 'ReviewPackager', {
+      uploadBucket: this.deploymentPipeline.artifactsBucket,
+      gitTokenSecret,
+      callbackTokenSecret: this.registration.callbackTokenSecret,
+      callbackBaseUrl: props.callbackBaseUrl,
+      agentIdParam,
+    });
+
+    // Subscribe to Pull Request events from the commons webhook infrastructure
+    new events.Rule(this, 'AiReviewPrRule', {
+      description: 'Routes Pull Request webhook events to the AI review packager Lambda.',
+      eventPattern: {
+        source: ['lonic.webhook'],
+        detailType: ['Pull Request'],
+        detail: {
+          action: ['opened', 'updated', 'reopened'],
+        },
+      },
+      targets: [new targets.LambdaFunction(reviewPackager.fn)],
+    });
+
+    const reviewResultHandler = new ReviewResultHandler(this, 'ReviewResultHandler', {
+      api: this.agentApi.restApi,
+      gitTokenSecret,
+    });
+
+    // Webhook registration for AI review — uses the commons webhook
+    // infrastructure singleton to create webhooks on git providers.
+    const webhookInfra = lonicConstructs.webhook.WebhookInfrastructure.singleton(this);
+
+    const configureReview = new ConfigureReview(this, 'ConfigureReview', {
+      api: this.agentApi.restApi,
+      gitTokenSecret,
+      webhookApiUrl: webhookInfra.apiGatewayUrl,
+      webhookTableName: webhookInfra.tableName,
+      webhookTableArn: webhookInfra.tableArn,
+    });
+
     // --- Runtime Error Reporting (independent alarm-based path to backend) ---
 
     this.runtimeErrorReporter = new RuntimeErrorReporter(this, 'RuntimeErrorReporter', {
@@ -220,6 +278,9 @@ export class LonicCloudAgentStack extends cdk.Stack {
         this.healthCheck.fn,
         this.getUploadUrl.fn,
         this.commandQueue.consumerFn,
+        reviewPackager.fn,
+        reviewResultHandler.fn,
+        configureReview.fn,
       ],
       callbackTokenSecret: this.registration.callbackTokenSecret,
       callbackBaseUrl: props.callbackBaseUrl,
