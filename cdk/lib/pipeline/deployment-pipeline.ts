@@ -2,9 +2,10 @@ import * as cdk from 'aws-cdk-lib/core';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import { pipeline, steps, sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
-import { Construct } from 'constructs';
-import { CommandQueue } from '../commands/command-queue';
+import {pipeline, sfn as lonicSfn, steps} from '@lonic/lonic-cdk-commons';
+import {Construct} from 'constructs';
+import {CommandQueue} from '../commands/command-queue';
+import {SingletonScope} from "@lonic/lonic-cdk-commons/lib/constructs/registry";
 
 export interface DeploymentPipelineProps {
   /** API Gateway to add the deploy-pipeline route to. */
@@ -59,6 +60,7 @@ export class DeploymentPipeline extends Construct {
             })
         );
       },
+      singletonScope: SingletonScope.Stack,
       stateMachineName: 'LonicAgent-DeploymentPipeline',
       timeout: cdk.Duration.minutes(60),
     });
