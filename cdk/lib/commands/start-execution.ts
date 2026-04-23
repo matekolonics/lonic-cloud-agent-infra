@@ -41,6 +41,7 @@ export class StartExecutionCommand extends Construct {
 
     this.stateMachine = new sfn.StateMachine(this, 'StateMachine', {
       definitionBody: sfn.DefinitionBody.fromChainable(definition.startState),
+      queryLanguage: sfn.QueryLanguage.JSONATA,
       stateMachineType: sfn.StateMachineType.EXPRESS,
       timeout: cdk.Duration.minutes(1),
       stateMachineName: 'LonicAgent-StartExecution',

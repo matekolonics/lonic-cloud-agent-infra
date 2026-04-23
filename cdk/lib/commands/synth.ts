@@ -54,6 +54,7 @@ export class SynthCommand extends Construct {
 
     this.stateMachine = new sfn.StateMachine(this, 'StateMachine', {
       definitionBody: sfn.DefinitionBody.fromChainable(synthStep.startState),
+      queryLanguage: sfn.QueryLanguage.JSONATA,
       timeout: cdk.Duration.minutes(30),
       stateMachineName: props.stateMachineName,
     });

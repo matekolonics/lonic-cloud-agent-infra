@@ -62,6 +62,7 @@ export class DescribeStacksCommand extends Construct {
     this.stateMachine = new sfn.StateMachine(this, 'StateMachine', {
       definitionBody: sfn.DefinitionBody.fromChainable(definition.startState),
       stateMachineType: sfn.StateMachineType.EXPRESS,
+      queryLanguage: sfn.QueryLanguage.JSONATA,
       timeout: cdk.Duration.minutes(5),
       stateMachineName: 'LonicAgent-DescribeStacks',
     });
