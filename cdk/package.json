@@ -23,6 +23,6 @@
   "dependencies": {
     "aws-cdk-lib": "^2.244.0",
     "constructs": "^10.5.0",
-    "@lonic/lonic-cdk-commons": "^0.1.27"
+    "@lonic/lonic-cdk-commons": "^0.1.28"
   }
 }
