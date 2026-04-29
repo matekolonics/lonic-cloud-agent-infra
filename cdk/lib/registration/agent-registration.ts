@@ -79,13 +79,15 @@ exports.handler = async (event) => {
     agentVersion: AgentVersion,
   });
 
-  if (!result.callbackToken) {
+  // Backend wraps responses in a { data: ... } envelope.
+  const callbackToken = result?.data?.callbackToken;
+  if (!callbackToken) {
     throw new Error('Backend did not return a callbackToken');
   }
 
   await smClient.send(new PutSecretValueCommand({
     SecretId: process.env.SECRET_ARN,
-    SecretString: result.callbackToken,
+    SecretString: callbackToken,
   }));
 
   return {
