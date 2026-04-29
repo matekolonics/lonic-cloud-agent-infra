@@ -6,6 +6,8 @@ import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
 import { CommandQueue } from './command-queue';
 
+const { ExecutionInput, JsonataExpr, Literal } = lonicSfn;
+
 export interface SelfUpdateCommandProps {
   readonly api: apigateway.RestApi;
   readonly commandQueue: CommandQueue;
@@ -39,15 +41,15 @@ export class SelfUpdateCommand extends Construct {
   constructor(scope: Construct, id: string, props: SelfUpdateCommandProps) {
     super(scope, id);
 
-    const stackName = new lonicSfn.StateOutput('$states.context.Execution.Input.payload.stackName');
-    const changeSetName = new lonicSfn.StateOutput('"lonic-self-update-" & $replace($states.context.Execution.Name, ":", "-")');
+    const stackName = new ExecutionInput('payload.stackName');
+    const changeSetName = new JsonataExpr('"lonic-self-update-" & $replace($states.context.Execution.Name, ":", "-")');
 
     const definition = lonicSfn.Step.of(
       new lonicSfn.tasks.CreateChangeSetStep(this, 'CreateChangeSet', {
         stackName,
         changeSetName,
-        exists: new lonicSfn.StateOutput('true'),
-        templateUrl: new lonicSfn.StateOutput('$states.context.Execution.Input.payload.templateUrl'),
+        exists: new Literal(true),
+        templateUrl: new ExecutionInput('payload.templateUrl'),
         capabilities: ['CAPABILITY_NAMED_IAM', 'CAPABILITY_IAM', 'CAPABILITY_AUTO_EXPAND'],
       }),
     )
@@ -93,7 +95,7 @@ export class SelfUpdateCommand extends Construct {
           `{% ${o.StackStatus.expression} = "UPDATE_COMPLETE" %}`,
         ),
         failWhen: o => sfn.Condition.jsonata(
-          `{% not (${o.StackStatus.expression} in ["UPDATE_IN_PROGRESS", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"]) %}`,
+          `{% $not(${o.StackStatus.expression} in ["UPDATE_IN_PROGRESS", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"]) %}`,
         ),
         failError: 'UPDATE_FAILED',
         failCause: 'Agent stack update failed',

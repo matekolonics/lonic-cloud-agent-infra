@@ -51,7 +51,7 @@ export class DeploymentPipeline extends Construct {
         this.artifactsBucket = ctx.getOrCreateArtifactsBucket();
         return new steps.build.SynthStep(this, ctx, 'Synth', {
           source: { mode: 'DYNAMIC', bucket: this.artifactsBucket },
-          sourceUri: new lonicSfn.StateOutput('$states.input.payload.sourceUri'),
+          sourceUri: new lonicSfn.StateOutput('payload.sourceUri'),
         })
         .next((o, vars) =>
             new steps.deploy.DeployStacksStep(this, ctx, 'Deploy', {

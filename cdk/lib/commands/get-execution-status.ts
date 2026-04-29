@@ -30,7 +30,7 @@ export class GetExecutionStatusCommand extends Construct {
 
     const definition = lonicSfn.Step.of(
       new lonicSfn.tasks.DescribeExecutionStep(this, 'DescribeExecution', {
-        executionArn: new lonicSfn.StateOutput('$states.input.payload.executionArn'),
+        executionArn: new lonicSfn.StateOutput('payload.executionArn'),
       }),
     );
 

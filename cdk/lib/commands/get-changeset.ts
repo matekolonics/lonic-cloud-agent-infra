@@ -6,6 +6,8 @@ import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
 import { CommandQueue } from './command-queue';
 
+const { ExecutionInput, JsonataExpr } = lonicSfn;
+
 export interface GetChangesetCommandProps {
   readonly api: apigateway.RestApi;
   readonly commandQueue: CommandQueue;
@@ -34,16 +36,18 @@ export class GetChangesetCommand extends Construct {
   constructor(scope: Construct, id: string, props: GetChangesetCommandProps) {
     super(scope, id);
 
-    // Use Execution.Input so these expressions remain valid across all states, not just the first
-    const stackName = new lonicSfn.StateOutput('$states.context.Execution.Input.payload.stackName');
-    const changeSetName = new lonicSfn.StateOutput('"lonic-preview-" & $replace($states.context.Execution.Name, ":", "-")');
+    // ExecutionInput so these expressions remain valid across all states, not just the first
+    const stackName = new ExecutionInput('payload.stackName');
+    const templateUrl = new ExecutionInput('payload.templateUrl');
+    const changeSetType = new ExecutionInput('payload.changeSetType');
+    const changeSetName = new JsonataExpr('"lonic-preview-" & $replace($states.context.Execution.Name, ":", "-")');
 
     const definition = lonicSfn.Step.of(
       new lonicSfn.tasks.CreateChangeSetStep(this, 'CreateChangeSet', {
         stackName,
         changeSetName,
-        exists: new lonicSfn.StateOutput('$states.context.Execution.Input.payload.changeSetType = "UPDATE"'),
-        templateUrl: new lonicSfn.StateOutput('$states.context.Execution.Input.payload.templateUrl'),
+        exists: new JsonataExpr(`${changeSetType.expression} = "UPDATE"`),
+        templateUrl,
       }),
     )
     .next(() =>

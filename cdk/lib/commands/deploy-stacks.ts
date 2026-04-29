@@ -6,6 +6,8 @@ import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
 import { CommandQueue } from './command-queue';
 
+const { JsonataExpr } = lonicSfn;
+
 export interface DeployStacksCommandProps {
   readonly api: apigateway.RestApi;
   readonly commandQueue: CommandQueue;
@@ -35,7 +37,7 @@ export class DeployStacksCommand extends Construct {
   constructor(scope: Construct, id: string, props: DeployStacksCommandProps) {
     super(scope, id);
 
-    const changeSetName = new lonicSfn.StateOutput('"lonic-deploy-" & $replace($states.context.Execution.Name, ":", "-")');
+    const changeSetName = new JsonataExpr('"lonic-deploy-" & $replace($states.context.Execution.Name, ":", "-")');
 
     class Processor extends lonicSfn.MapItemProcessor<{
       StackName: lonicSfn.StateOutput;
@@ -77,8 +79,8 @@ export class DeployStacksCommand extends Construct {
               new lonicSfn.tasks.CreateChangeSetStep(this, 'CreateChangeSet', {
                 stackName,
                 changeSetName,
-                exists: new lonicSfn.StateOutput(`${o.StackStatus.expression} != "DOES_NOT_EXIST"`),
-                templateUrl: new lonicSfn.StateOutput(`${templateBaseUrl.expression} & "/" & ${stackName.expression} & ".template.json"`),
+                exists: new JsonataExpr(`${o.StackStatus.expression} != "DOES_NOT_EXIST"`),
+                templateUrl: new JsonataExpr(`${templateBaseUrl.expression} & "/" & ${stackName.expression} & ".template.json"`),
                 capabilities: ['CAPABILITY_NAMED_IAM', 'CAPABILITY_IAM', 'CAPABILITY_AUTO_EXPAND'],
               }),
             )
@@ -125,7 +127,7 @@ export class DeployStacksCommand extends Construct {
                 `{% ${o.StackStatus.expression} in ["CREATE_COMPLETE", "UPDATE_COMPLETE"] %}`,
               ),
               failWhen: o => sfn.Condition.jsonata(
-                `{% not (${o.StackStatus.expression} in ["CREATE_IN_PROGRESS", "UPDATE_IN_PROGRESS", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"]) %}`,
+                `{% $not(${o.StackStatus.expression} in ["CREATE_IN_PROGRESS", "UPDATE_IN_PROGRESS", "UPDATE_COMPLETE_CLEANUP_IN_PROGRESS"]) %}`,
               ),
               failError: 'DEPLOY_FAILED',
               failCause: 'Stack deployment failed',

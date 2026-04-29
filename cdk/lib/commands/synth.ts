@@ -49,7 +49,7 @@ export class SynthCommand extends Construct {
     const synthStep = new lonicSfn.tasks.CdkSynthStep(this, 'Synth', {
       source: { mode: 'DYNAMIC', bucket: props.artifactsBucket },
       artifactBucket: props.artifactsBucket,
-      sourceUri: new lonicSfn.StateOutput('$states.input.payload.sourceUri'),
+      sourceUri: new lonicSfn.StateOutput('payload.sourceUri'),
     });
 
     this.stateMachine = new sfn.StateMachine(this, 'StateMachine', {

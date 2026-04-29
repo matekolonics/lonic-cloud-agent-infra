@@ -14,15 +14,15 @@
   "devDependencies": {
     "@types/jest": "^30",
     "@types/node": "^24.10.1",
+    "aws-cdk": "2.1114.1",
     "jest": "^30",
     "ts-jest": "^29",
-    "aws-cdk": "2.1114.1",
     "ts-node": "^10.9.2",
     "typescript": "~5.9.3"
   },
   "dependencies": {
+    "@lonic/lonic-cdk-commons": "^0.1.29",
     "aws-cdk-lib": "^2.244.0",
-    "constructs": "^10.5.0",
-    "@lonic/lonic-cdk-commons": "^0.1.28"
+    "constructs": "^10.5.0"
   }
 }

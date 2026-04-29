@@ -6,6 +6,8 @@ import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
 import { CommandQueue } from './command-queue';
 
+const { ExecutionInput } = lonicSfn;
+
 export interface DetectDriftCommandProps {
   readonly api: apigateway.RestApi;
   readonly commandQueue: CommandQueue;
@@ -32,7 +34,7 @@ export class DetectDriftCommand extends Construct {
 
     const definition = lonicSfn.Step.of(
       new lonicSfn.tasks.DetectStackDriftStep(this, 'DetectDrift', {
-        stackName: new lonicSfn.StateOutput('$states.context.Execution.Input.payload.stackName'),
+        stackName: new ExecutionInput('payload.stackName'),
       }),
     )
     .next(o =>
@@ -56,7 +58,7 @@ export class DetectDriftCommand extends Construct {
     .next(() =>
       lonicSfn.Step.of(
         new lonicSfn.tasks.DescribeStackResourceDriftsStep(this, 'GetDriftDetails', {
-          stackName: new lonicSfn.StateOutput('$states.context.Execution.Input.payload.stackName'),
+          stackName: new ExecutionInput('payload.stackName'),
           stackResourceDriftStatusFilters: ['MODIFIED', 'DELETED', 'NOT_CHECKED'],
         }),
       )

@@ -6,6 +6,8 @@ import { sfn as lonicSfn } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
 import { addSyncExecutionRoute } from './api-sfn-integration';
 
+const { JsonataExpr } = lonicSfn;
+
 export interface StartExecutionCommandProps {
   readonly api: apigateway.RestApi;
 }
@@ -34,8 +36,8 @@ export class StartExecutionCommand extends Construct {
 
     const definition = lonicSfn.Step.of(
       new lonicSfn.tasks.StartExecutionStep(this, 'StartExecution', {
-        stateMachineArn: new lonicSfn.StateOutput('$states.input.payload.stateMachineArn'),
-        input: new lonicSfn.StateOutput('$string($states.input.payload.input)'),
+        stateMachineArn: new lonicSfn.StateOutput('payload.stateMachineArn'),
+        input: new JsonataExpr('$string($states.input.payload.input)'),
       }),
     );
 
