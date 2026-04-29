@@ -291,11 +291,12 @@ function post(url, body, token) {
 }
 
 exports.handler = async () => {
+  // Always POST — the backend uses this call as the agent's liveness signal
+  // (lastHeartbeat is updated on every /agent/error-stats request, regardless
+  // of stats.healthy). The healthy flag in the body still describes error state.
   const stats = await collectStats();
-  if (!stats.healthy) {
-    const token = await getToken();
-    await post(BASE_URL + "/agent/error-stats", { agentId: AGENT_ID, ...stats }, token);
-  }
+  const token = await getToken();
+  await post(BASE_URL + "/agent/error-stats", { agentId: AGENT_ID, ...stats }, token);
 };
 `),
       timeout: cdk.Duration.seconds(30),
