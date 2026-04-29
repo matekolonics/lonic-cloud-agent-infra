@@ -91,6 +91,8 @@ export class LonicCloudAgentStack extends cdk.Stack {
       setupTokenParam,
       agentVersion: props.agentVersion,
       callbackBaseUrl: props.callbackBaseUrl,
+      apiUrl: this.agentApi.restApi.url,
+      apiArn: this.agentApi.restApi.arnForExecuteApi(),
     });
 
     // --- Event Reporter ---

@@ -9,6 +9,10 @@ export interface AgentRegistrationProps {
   readonly setupTokenParam: cdk.CfnParameter;
   readonly agentVersion: string;
   readonly callbackBaseUrl: string;
+  /** Invoke URL of this agent's API Gateway. The backend SigV4-signs and POSTs commands here. */
+  readonly apiUrl: string;
+  /** execute-api ARN of this agent's API Gateway. */
+  readonly apiArn: string;
 }
 
 export class AgentRegistration extends Construct {
@@ -47,6 +51,8 @@ export class AgentRegistration extends Construct {
         AgentId: props.agentIdParam.valueAsString,
         SetupToken: props.setupTokenParam.valueAsString,
         AgentVersion: props.agentVersion,
+        ApiUrl: props.apiUrl,
+        ApiArn: props.apiArn,
       },
     });
 
@@ -62,7 +68,7 @@ const { SecretsManagerClient, PutSecretValueCommand } = require('@aws-sdk/client
 const smClient = new SecretsManagerClient();
 
 exports.handler = async (event) => {
-  const { AgentId, SetupToken, AgentVersion } = event.ResourceProperties;
+  const { AgentId, SetupToken, AgentVersion, ApiUrl, ApiArn } = event.ResourceProperties;
 
   if (event.RequestType === 'Delete') {
     try {
@@ -77,6 +83,8 @@ exports.handler = async (event) => {
     agentId: AgentId,
     setupToken: SetupToken,
     agentVersion: AgentVersion,
+    apiUrl: ApiUrl,
+    apiArn: ApiArn,
   });
 
   // Backend wraps responses in a { data: ... } envelope.
