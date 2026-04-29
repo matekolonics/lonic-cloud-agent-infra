@@ -86,13 +86,26 @@ export class LonicCloudAgentStack extends cdk.Stack {
 
     // --- Registration ---
 
+    // Build apiUrl/apiArn from restApiId only — avoids depending on the
+    // RestApi's deploymentStage (which transitively depends on every Method
+    // and their Lambda integrations, several of which read the callback token
+    // secret defined inside AgentRegistration → circular dependency).
+    const apiStage = 'v1';
+    const restApiId = this.agentApi.restApi.restApiId;
+    const apiUrl = `https://${restApiId}.execute-api.${cdk.Aws.REGION}.amazonaws.com/${apiStage}/`;
+    const apiArn = cdk.Stack.of(this).formatArn({
+      service: 'execute-api',
+      resource: restApiId,
+      resourceName: '*',
+    });
+
     this.registration = new AgentRegistration(this, 'Registration', {
       agentIdParam,
       setupTokenParam,
       agentVersion: props.agentVersion,
       callbackBaseUrl: props.callbackBaseUrl,
-      apiUrl: this.agentApi.restApi.url,
-      apiArn: this.agentApi.restApi.arnForExecuteApi(),
+      apiUrl,
+      apiArn,
     });
 
     // --- Event Reporter ---
