@@ -9,6 +9,7 @@ import { constructs as lonicConstructs } from '@lonic/lonic-cdk-commons';
 import { Construct } from 'constructs';
 import { AgentApi } from './api/agent-api';
 import { AgentRegistration } from './registration/agent-registration';
+import { GitCredentials } from './credentials/git-credentials';
 import { EventReporter } from './lambdas/event-reporter';
 import { HealthCheck } from './lambdas/health-check';
 import { DescribeStacksCommand } from './commands/describe-stacks';
@@ -48,6 +49,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
   public readonly deploymentPipeline: DeploymentPipeline;
   public readonly getUploadUrl: GetUploadUrl;
   public readonly runtimeErrorReporter: RuntimeErrorReporter;
+  public readonly gitCredentials: GitCredentials;
 
   constructor(scope: Construct, id: string, props: LonicCloudAgentStackProps) {
     super(scope, id, props);
@@ -84,6 +86,12 @@ export class LonicCloudAgentStack extends cdk.Stack {
       backendRoleArn: props.backendRoleArn,
     });
 
+    // --- Git Credentials (KMS keypair + Secrets Manager secret + management Lambdas) ---
+
+    this.gitCredentials = new GitCredentials(this, 'GitCredentials', {
+      api: this.agentApi.restApi,
+    });
+
     // --- Registration ---
 
     // Build apiUrl/apiArn from restApiId only — avoids depending on the
@@ -106,6 +114,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
       callbackBaseUrl: props.callbackBaseUrl,
       apiUrl,
       apiArn,
+      credentialKey: this.gitCredentials.key,
     });
 
     // --- Event Reporter ---

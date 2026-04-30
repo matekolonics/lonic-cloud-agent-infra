@@ -1,5 +1,7 @@
 import * as cdk from 'aws-cdk-lib/core';
 import * as cr from 'aws-cdk-lib/custom-resources';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as kms from 'aws-cdk-lib/aws-kms';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
@@ -13,6 +15,8 @@ export interface AgentRegistrationProps {
   readonly apiUrl: string;
   /** execute-api ARN of this agent's API Gateway. */
   readonly apiArn: string;
+  /** KMS asymmetric key whose public key will be sent to the backend at registration. */
+  readonly credentialKey: kms.IKey;
 }
 
 export class AgentRegistration extends Construct {
@@ -36,10 +40,19 @@ export class AgentRegistration extends Construct {
       environment: {
         CALLBACK_BASE_URL: props.callbackBaseUrl,
         SECRET_ARN: this.callbackTokenSecret.secretArn,
+        CREDENTIAL_KEY_ID: props.credentialKey.keyId,
       },
     });
 
     this.callbackTokenSecret.grantWrite(registrationFn);
+
+    // Allow the registration handler to read the credential key's public key
+    // and send it to the backend. GetPublicKey is read-only and the key is
+    // marked ENCRYPT_DECRYPT — no decrypt grant needed here.
+    registrationFn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['kms:GetPublicKey'],
+      resources: [props.credentialKey.keyArn],
+    }));
 
     const registrationProvider = new cr.Provider(this, 'RegistrationProvider', {
       onEventHandler: registrationFn,
@@ -64,8 +77,10 @@ function registrationHandlerCode(): string {
   return `
 const https = require('https');
 const { SecretsManagerClient, PutSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
+const { KMSClient, GetPublicKeyCommand } = require('@aws-sdk/client-kms');
 
 const smClient = new SecretsManagerClient();
+const kmsClient = new KMSClient();
 
 exports.handler = async (event) => {
   const { AgentId, SetupToken, AgentVersion, ApiUrl, ApiArn } = event.ResourceProperties;
@@ -79,12 +94,18 @@ exports.handler = async (event) => {
     return { PhysicalResourceId: event.PhysicalResourceId };
   }
 
+  // Fetch the credential key's public key in DER (SPKI) form, base64-encode for transport.
+  // Frontend Web Crypto: importKey('spki', base64-decoded, { name: 'RSA-OAEP', hash: 'SHA-256' }, ...).
+  const pk = await kmsClient.send(new GetPublicKeyCommand({ KeyId: process.env.CREDENTIAL_KEY_ID }));
+  const credentialPublicKey = Buffer.from(pk.PublicKey).toString('base64');
+
   const result = await callBackend('/agent/register', {
     agentId: AgentId,
     setupToken: SetupToken,
     agentVersion: AgentVersion,
     apiUrl: ApiUrl,
     apiArn: ApiArn,
+    credentialPublicKey,
   });
 
   // Backend wraps responses in a { data: ... } envelope.
