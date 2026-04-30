@@ -163,17 +163,6 @@ export class DeployStacksCommand extends Construct {
       resources: ['*'],
     }));
 
-    // Stacks being deployed may create any resource — grant via CalledVia condition
-    this.stateMachine.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['*'],
-      resources: ['*'],
-      conditions: {
-        'ForAnyValue:StringEquals': {
-          'aws:CalledVia': ['cloudformation.amazonaws.com'],
-        },
-      },
-    }));
-
     props.commandQueue.addQueuedRoute(this, 'deploy-stacks', this.stateMachine);
   }
 }

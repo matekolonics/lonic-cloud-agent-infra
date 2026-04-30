@@ -119,17 +119,6 @@ export class SelfUpdateCommand extends Construct {
       resources: ['*'],
     }));
 
-    // The change set may update any resource in the agent stack
-    this.stateMachine.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['*'],
-      resources: ['*'],
-      conditions: {
-        'ForAnyValue:StringEquals': {
-          'aws:CalledVia': ['cloudformation.amazonaws.com'],
-        },
-      },
-    }));
-
     props.commandQueue.addQueuedRoute(this, 'self-update', this.stateMachine);
   }
 }
