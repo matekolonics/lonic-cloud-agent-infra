@@ -90,7 +90,7 @@ Either wire them up or delete them.
 | `deploy-pipeline` | `LonicAgent-DeploymentPipeline` (chained synth → deploy) | The end-to-end variant. Backend prefers calling `synth-infrastructure` and `deploy-stacks` as separate pipeline steps, so this is unused today. |
 | `get-execution-status` | EXPRESS SFN | The polling counterpart to `start-execution`. Wired-up dispatch only sends `start-execution`; nothing currently polls. |
 | `configure-review` | direct Lambda | Wired but consumer path not traced — may be hit from frontend or other repos. **Verify before deleting.** |
-| `get-upload-url` | direct Lambda (presigned S3 PUT) | Same — likely called from frontend / other repos for source-archive uploads. **Verify before deleting.** |
+| `get-upload-url` | direct Lambda (presigned S3 PUT) | Designed for the manual-upload v1 path that's now deferred to v2. Keep for v2 (master-agent + manual zip). |
 
 **Action items:**
 - [ ] Decide each: wire it on the backend, or delete it from the agent.
@@ -113,62 +113,161 @@ The only differences are the API route path and state-machine name.
 
 ---
 
-## Source archive location — design choice
+## Source acquisition — design (git-first)
 
-`InfraDefinition.source_uri` is set by **the backend** (`api-apps/upload.rs:23-69`):
-the frontend POSTs `/workspaces/:wsId/apps/:appId/infra/upload-url`, the backend
-returns a presigned `PUT` into `state.specs_bucket` (the backend's S3 bucket),
-the frontend uploads there, and `source_uri` = `s3://<backend-specs-bucket>/uploads/...`.
+The primary source-of-truth for customer infra code is **git**, not manual zip
+uploads. Lonic's value proposition is automation; making users hand-upload zips
+runs counter to that. Manual upload is deferred to a v2 secondary path.
 
-**Problem:** the customer agent's CodeBuild role only has read access to its
-own `artifactsBucket` (in the customer's account). It cannot read from the
-backend's specs bucket without cross-account S3 grants on both sides.
+### How sources reach the agent
 
-The agent already has `POST /v1/commands/get-upload-url` (`get-upload-url.ts`),
-which returns a presigned `PUT` URL into the agent's `artifactsBucket`. **This
-route exists but isn't currently called by anyone** — strong hint it was
-designed for exactly this case but never wired.
+CodeBuild clones the customer's repo at synth time. **No S3 archive transit
+through the lonic backend.** Customer source flows: customer's git host →
+agent's CodeBuild → synth output in agent's `artifactsBucket`. Backend never
+sees source content, only metadata (repo URL, ref, optional commit SHA).
 
-Three architectural options, in order of "how much customer code stays in the
-customer account":
+### Git authentication — universal user-managed Secrets Manager model
 
-### (a) Frontend uploads via the agent (most isolation, more hops)
+We do **not** use AWS CodeConnections. Reasons:
+- CodeConnections only solves the clone-from-CodeBuild case. Webhook management,
+  PR comments, branch ancestry compare, and other API surfaces lonic uses still
+  require a PAT or equivalent.
+- CodeConnections doesn't support Azure DevOps, self-hosted Bitbucket Server,
+  or niche / self-hosted git servers.
 
-1. Frontend asks backend "I want to upload infra for app X" → backend calls the agent's `get-upload-url` (over the IAM-signed channel) and proxies the presigned URL back.
-2. Frontend `PUT`s the zip to that URL — directly into the customer's S3 bucket.
-3. Backend stores `source_uri = s3://<customer-artifacts-bucket>/uploads/...` on the InfraDefinition.
-4. Synth dispatches with that URI. Agent's CodeBuild role already has the IAM grant.
+Single auth model across the entire codebase: **PAT in customer-controlled AWS
+Secrets Manager**, scoped to a `lonic/*` name prefix.
 
-**Trade-off:** customer source code never lands in the lonic backend account at all. Two extra hops on upload (backend → agent for URL; frontend → agent for PUT). The agent's `get-upload-url` is now load-bearing.
+`GitConnection` schema (backend):
+```rust
+struct GitConnection {
+    provider: String,                  // "github" | "gitlab" | "bitbucket" | "azure-devops" | ...
+    api_base_url: Option<String>,      // for self-hosted (GHES, GitLab on-prem, etc.)
+    repo_url: String,
+    default_branch: String,
+    secret_arn: String,                // points at a Secrets Manager secret named lonic/*
+    secret_field: Option<String>,      // for JSON-bundled secrets — JSON key to read
+}
+```
 
-### (b) Backend uploads, then copies to agent on dispatch (current upload flow + S3 copy)
+Cost optimisation: a single secret (e.g. `lonic/git-credentials`) holds many
+PATs as JSON fields. CodeBuild's native `arn:...:secret:foo:json-key::` syntax
+extracts a single field at runtime. One secret per agent → many credentials at
+$0.40/month total instead of $0.40 × N.
 
-Keep current frontend → backend upload as-is. On synth dispatch, backend does an `s3 cp` (or `s3 sync`) from the backend specs bucket to the agent's artifacts bucket via the agent's `get-upload-url` flow, then dispatches with the customer-side URI.
+### Two creation paths for `GitConnection`
 
-**Trade-off:** less frontend churn. Customer source briefly transits through the lonic backend account. Storage doubled (until cleanup).
+Same end state (a record with `secret_arn` + optional `secret_field`); user
+chooses based on trust posture.
 
-### (c) Cross-account S3 ACL on the backend bucket
+**Path A — convenience (paste credential, end-to-end encrypted).**
 
-Add a bucket policy on the backend's specs bucket allowing each customer's agent CodeBuild role to read its own `uploads/<orgId>/...` prefix. Agent CodeBuild reads directly from the backend bucket.
+For users who don't want extra setup steps. Token is encrypted client-side
+using the agent's public key, so the lonic backend handles only opaque
+ciphertext — even a fully compromised backend cannot leak credentials.
 
-**Trade-off:** no upload flow changes. Bucket policy grows unbounded with customers — manageable via a regex on the role ARN pattern. Customer source permanently lives in the lonic backend account, which is the worst posture for "code never leaves customer account."
+1. Agent stack creates a **KMS asymmetric key** (`RSA_2048`, `ENCRYPT_DECRYPT`).
+   Public key emitted as a stack output for customer-side verification (auditor
+   can compare to what lonic shows in the dashboard).
+2. Pubkey sent to backend at registration alongside `apiUrl` / `apiArn`. Backend
+   caches on the agent record.
+3. Frontend fetches `agent.publicKey` from backend, encrypts the PAT using
+   Web Crypto `RSA-OAEP-SHA256`, base64-encodes ciphertext.
+4. Frontend → backend → SigV4-POST `/v1/commands/save-git-credential` to the
+   agent with `{ key, ciphertext }` (backend relays opaque blob).
+5. Agent calls `kms:Decrypt` to get the plaintext, merges field into
+   `lonic/git-credentials` secret JSON, returns `{ secretArn, fieldName }`.
+6. Backend creates `GitConnection` with the returned ARN/field.
 
-**Decision: (a).** Customer code never enters the lonic backend account; the
-agent's existing `get-upload-url` graduates from "orphan" to "wired"; IAM
-scoping stays clean.
+The open-source agent code only ever has a **ciphertext-accepting endpoint**.
+There is no plaintext path in commit history. Auditors can verify by reading
+the source.
 
-**Implementation outline:**
-- Backend rewires `POST /workspaces/:wsId/apps/:appId/infra/upload-url` (`api-apps/upload.rs`) to:
-  1. Look up the workspace's agent → fetch `agent.apiUrl`.
-  2. SigV4-POST to `<apiUrl>/v1/commands/get-upload-url` (the existing agent endpoint).
-  3. Return the agent-issued presigned URL to the caller.
-- `InfraDefinition.source_uri` now points to `s3://<customer-artifacts-bucket>/...`.
-- Synth dispatch reads that URI and includes it in `payload.sourceUri`. CodeBuild's existing IAM grant on `artifactsBucket` covers the read.
+**Path B — max-safety (paste ARN).**
 
-**Action items:**
-- [ ] Implement the proxy on the backend (one new function in `api-apps/upload.rs`).
-- [ ] Verify the agent's `get-upload-url` endpoint accepts the same SigV4-from-backend-role flow as the other commands.
-- [ ] Move `get-upload-url` from the orphan list to "wired" once the backend is calling it.
+For customers with regulatory / policy constraints requiring credentials never
+touch any third-party system, even encrypted.
+
+1. Customer creates the secret directly in their AWS account:
+   `aws secretsmanager create-secret --name lonic/git/<id> --secret-string <pat>`
+   (or via Console / their own IaC). Secret name **must** start with `lonic/`
+   so it falls under the agent's IAM grant.
+2. Customer pastes the ARN (and optional JSON field name) into the lonic UI.
+3. Backend creates `GitConnection` directly with those values. PAT never enters
+   lonic.
+
+### Agent IAM scope
+
+CodeBuild role and credential-management Lambdas all get a single, narrow
+grant: `secretsmanager:GetSecretValue` on
+`arn:aws:secretsmanager:REGION:ACCOUNT:secret:lonic/*`. Covers both lonic-managed
+(Path A) and self-managed (Path B) secrets without being over-broad. The
+credential-management Lambdas additionally get `secretsmanager:PutSecretValue`
+and `kms:Decrypt` on the agent's KMS key.
+
+### `SourceStep` DYNAMIC mode (commons addition)
+
+Existing `SourceStep` is static (CodeConnections + repo baked in). We add a
+`DYNAMIC` mode for runtime-supplied repo + auth:
+
+- Construction: `mode: 'DYNAMIC'`, `artifactBucket`. No `connectionArn`,
+  `fullRepositoryId`, `branchName`, `provider`.
+- Runtime env (via `environmentVariablesOverride`): `REPO_URL`, `REF`,
+  `COMMIT_SHA?`, `APP_DIR?`, `TOKEN_SECRET_ARN?` (full Secrets Manager reference
+  including optional JSON-key syntax).
+- Buildspec branches on whether `TOKEN_SECRET_ARN` is set: with auth, clones
+  via `https://oauth2:$TOKEN@$REPO_URL`; without, clones the public repo plain.
+- Outputs unchanged (`ArtifactUri`, `CommitId`, `CommitMessage`).
+
+### Synth wiring
+
+Agent's `synth-infrastructure` state machine becomes
+`SourceStep (DYNAMIC) → CdkSynthStep`. `CdkSynthStep` already supports
+`DYNAMIC` source via `LONIC_SOURCE_URI`; the chained variable
+`SourceStep.ArtifactUri` feeds it.
+
+### Synth dispatch payload
+
+```json
+{
+  "commandId": "...",
+  "callbackUrl": "...",
+  "payload": {
+    "git": {
+      "repoUrl": "https://github.com/customer/repo.git",
+      "ref": "main",
+      "commitSha": "abc...",                       // optional pin
+      "appDirectory": "infra",                      // optional, for monorepos
+      "tokenSecretArn": "arn:...:secret:lonic/git-credentials",  // optional, omit for public
+      "tokenSecretField": "github-org-foo"          // optional JSON field
+    }
+  }
+}
+```
+
+### Decision summary
+
+- **Drop**: master-agent v1, manual zip upload as primary path, CodeConnections.
+- **Adopt**: git-first, user-managed Secrets Manager (`lonic/*` prefix), JSON-bundled
+  secrets for cost, agent KMS keypair for the convenience path, two creation paths
+  for `GitConnection` (encrypted-paste / paste-ARN).
+- **Defer to v2**: master-agent model for shared archive distribution if/when
+  manual zip upload comes back as a feature.
+
+### Implementation order
+
+1. **commons:** `SourceStep` `DYNAMIC` mode. Publish 0.1.30.
+2. **agent:**
+   - KMS asymmetric key in CDK; pubkey emitted as stack output and sent at registration.
+   - `lonic/git-credentials` secret + IAM grants.
+   - `save-git-credential` / `delete-git-credential` / `list-git-credentials` Lambda routes.
+   - Chain `SourceStep` (DYNAMIC) → `CdkSynthStep` in `synth-infrastructure`.
+3. **backend:**
+   - `Agent.publicKey` field, persisted at registration.
+   - `GitConnection` schema (`provider`, `api_base_url?`, `repo_url`, `default_branch`, `secret_arn`, `secret_field?`).
+   - Two creation flows (relay-ciphertext / store-ARN) on the GitConnection endpoint.
+   - `trigger_deployment` builds the synth payload from `GitConnection`.
+4. **Frontend (out of scope for this repo):** Web Crypto encryption, dropdown for credential reuse, copy-paste CLI snippets for Path B.
 
 ---
 
@@ -184,9 +283,10 @@ scoping stays clean.
 
 ## Open questions
 
-- [x] **Source archive location** — **decided (a)**: backend proxies the agent's `get-upload-url`. Implementation outlined in the Source archive location section above.
+- [x] **Source acquisition** — **decided git-first** with user-managed Secrets Manager auth. Manual zip upload deferred to v2. Implementation outlined in the Source acquisition section above.
+- [x] **Frontend trust posture for credentials** — **decided dual-path**: encrypted-paste (Path A, end-to-end via agent KMS keypair) or self-managed ARN (Path B). Both supported.
 - [ ] **Orchestrator output piping** — Pass state vs `deploy-pipeline` reuse. Decision blocks the synth → deploy chain even after sourceUri is fixed.
 - [ ] **`provision` design** — new agent state machine, or reuse `deploy-pipeline` / split into `synth-infrastructure` + `deploy-stacks` on the backend?
-- [ ] **Orphan policy** — delete unused routes aggressively, or keep as forward-compat scaffolding? (Lean toward deleting — they can come back via PR when the matching backend caller lands.) Note: if we go with source-archive option (a), `get-upload-url` graduates out of the orphan list.
+- [ ] **Orphan policy** — delete unused routes aggressively, or keep as forward-compat scaffolding? (Lean toward deleting — they can come back via PR when the matching backend caller lands.) Note: `get-upload-url` stays as deferred-v2 scaffolding for the manual-upload path.
 - [ ] **Heartbeat interval** — default is 30 minutes (`RuntimeErrorReporter.reportingInterval`). Is that the right cadence for "is this agent alive" detection, or should it be tighter (5–10 min)?
 - [ ] **Payload-contract audit** — verify each entry in the "Other dispatches with unverified payload contracts" subsection by reading the matching state-machine input.
