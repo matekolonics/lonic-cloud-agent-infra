@@ -221,6 +221,7 @@ export class LonicCloudAgentStack extends cdk.Stack {
       routePath: 'synth-infrastructure',
       stateMachineName: 'LonicAgent-SynthInfrastructure',
       commandQueue: this.commandQueue,
+      source: { kind: 'GIT' },
     });
 
     new SynthCommand(this, 'SynthCdkProject', {
